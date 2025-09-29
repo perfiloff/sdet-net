@@ -1,0 +1,10 @@
+services:
+  frr:
+    image: frrouting/frr:v8.4.1
+    container_name: frr
+    privileged: true            # нужно для запуска BGP
+    volumes:
+      - ./frr.conf:/etc/frr/frr.conf
+      - ./daemons:/etc/frr/daemons
+    ports:
+      - "179:179"              # BGP порт наружу
