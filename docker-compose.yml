@@ -4,7 +4,24 @@ services:
     container_name: frr
     privileged: true            # нужно для запуска BGP
     volumes:
-      - ./frr.conf:/etc/frr/frr.conf
-      - ./daemons:/etc/frr/daemons
+      - ./dut-service/frr.conf:/etc/frr/frr.conf
+      - ./dut-service/daemons:/etc/frr/daemons
     ports:
       - "179:179"              # BGP порт наружу
+  
+  tester:
+    build:
+      context: tester-service
+      dockerfile: docker/Dockerfile
+    container_name: tester
+    volumes:
+      - ./tester-service/src:/opt/src
+      - ./timezone:/etc/localtime:ro
+    expose:
+      - "8000"
+    ports:
+      - "8080:8000"
+    env_file:
+      - tester-service/.env
+    entrypoint: >
+      sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
