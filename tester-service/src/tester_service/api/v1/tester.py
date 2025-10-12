@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("/ping")
 async def ping(request: Request):
     return Response(content="pong", status_code=200)
 
@@ -21,4 +21,5 @@ async def ping(request: Request):
 @router.get("/status", response_model=BGPConnectionStatus)
 async def get_status(bgp_manager: BGPManager = Depends(get_bgp_manager)):
     """Get BGP connection status"""
+    print(bgp_manager)
     return bgp_manager.get_connection_status()

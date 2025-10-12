@@ -3,7 +3,18 @@ from functools import lru_cache
 import struct
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from tester_service.services.bgp_models import BGPConfig, BGPConnectionStatus, BGPMessage, BGPStats
+from tester_service.services.bgp_models import (
+    BGPConfig,
+    BGPConnectionStatus,
+    BGPMessage, 
+    BGPStats,
+    BGPCapability,
+    BGPOpenMessage,
+    BGPKeepaliveMessage,
+    BGPUpdateMessage,
+    BGPNotificationMessage,
+    BGPUnknownMessage,
+)
 
 
 class BGPManager:
@@ -59,121 +70,199 @@ class BGPManager:
         msg_type = 4  # KEEPALIVE
         return marker + struct.pack("!HB", length, msg_type)
 
-    def decode_open_message(self, data: bytes) -> Dict[str, Any]:
+    def decode_open_message(self, data: bytes, direction: str) -> Dict[str, Any]:
         """Decode BGP OPEN message"""
         if len(data) < 29:
             raise ValueError("Too short for BGP OPEN")
 
         marker = data[:16]
-        length, msg_type = struct.unpack("!HB", data[16:19])
-
         if marker != b"\xff" * 16:
             raise ValueError("Bad marker")
+
+        length, msg_type = struct.unpack("!HB", data[16:19])
         if msg_type != 1:
             raise ValueError("Not an OPEN message")
 
         version, my_as, hold_time, bgp_id, opt_len = struct.unpack("!BHH4sB", data[19:29])
         bgp_id_str = ".".join(map(str, bgp_id))
         opts = data[29 : 29 + opt_len] if opt_len > 0 else b""
+        if opts:
+            capabilities = self.parse_optional_params(opt_bytes=opts)
 
-        return {
-            "length": length,
-            "type": msg_type,
-            "version": version,
-            "my_as": my_as,
-            "hold_time": hold_time,
-            "bgp_id": bgp_id_str,
-            "opt_len": opt_len,
-            "opt_bytes": opts.hex() if opts else None,
-        }
+        return BGPOpenMessage(
+            timestamp=datetime.now(),
+            direction=direction,
+            length=length,
+            message_type=msg_type,
+            version=version,
+            as_number=my_as,
+            hold_time=hold_time,
+            router_id=bgp_id_str,
+            capabilities=capabilities if opts else None,
+        )
 
-    def decode_keepalive_message(self, data: bytes) -> Dict[str, Any]:
+    def decode_keepalive_message(self, data: bytes, direction) -> Dict[str, Any]:
         """Decode BGP KEEPALIVE message"""
+        msg_dict = dict(
+            length=len(data),
+            timestamp=datetime.now(),
+            direction=direction,
+            message_type="KEEPALIVE",
+            raw_data=data
+            )
+        
         if len(data) < 19:
-            raise ValueError("Message too short for BGP")
-
+            return BGPUnknownMessage(**msg_dict, details={"note": "Message too short for BGP"})
+        
         marker, length, msg_type = struct.unpack("!16sHB", data[:19])
 
         if marker != b"\xff" * 16:
-            raise ValueError("Invalid marker")
+            return BGPUnknownMessage(**msg_dict, details={"note": "Invalid marker"})
 
         if length != 19:
-            raise ValueError(f"KEEPALIVE should be 19 bytes, got {length}")
+            return BGPUnknownMessage(**msg_dict, details={"note": f"KEEPALIVE should be 19 bytes, got {length}"})
+
 
         if msg_type != 4:
-            raise ValueError(f"Not a KEEPALIVE (type {msg_type})")
+            return BGPUnknownMessage(**msg_dict, details={"note": f"Not a KEEPALIVE (type {msg_type})"})
+            
+        return BGPKeepaliveMessage(
+            length=len(data),
+            timestamp=datetime.now(),
+            direction=direction,
+            message_type="KEEPALIVE",
+            details={"info": "KEEPALIVE received"},
+        )
 
-        return {"marker": marker.hex(), "length": length, "type": msg_type, "type_name": "KEEPALIVE"}
+    def decode_update_message(self, data: bytes, direction: str):
+        return BGPUpdateMessage(
+                length=len(data),
+                timestamp=datetime.now(),
+                direction=direction,
+                message_type="UPDATE",
+                details={"raw": data},
+                withdrawn_routes=[],
+                path_attributes={},
+                nlri=[],
+            )
 
-    def parse_bgp_message(self, data: bytes) -> Dict[str, Any]:
+    def parse_bgp_message(self, data: bytes, direction: str = "received") -> Dict[str, Any]:
         """Parse BGP message and return details"""
+        unknown_message = dict(
+            length=len(data),
+            timestamp=datetime.now(),
+            direction=direction,
+            message_type="UNKNOWN",
+            raw_data=data,
+        )
+        if direction == "sent":
+            return {}
         if len(data) < 19:
-            return {"error": "Too short BGP message"}
+            return BGPUnknownMessage(**unknown_message, details={"error": "Too short BGP message"})
 
         marker = data[:16]
         length, msg_type = struct.unpack("!HB", data[16:19])
         payload = data[19:length]
 
         if marker != b"\xff" * 16:
-            return {"error": "Invalid marker"}
+            return BGPUnknownMessage(**unknown_message, details={"error": "Invalid marker"})
 
-        message_info = {"length": length, "type": msg_type, "payload_hex": payload.hex()}
+        # message_info = {"length": length, "type": msg_type, "payload_hex": payload.hex()}
 
         if msg_type == 1:  # OPEN
             try:
-                open_details = self.decode_open_message(data)
-                message_info.update(open_details)
-                message_info["type_name"] = "OPEN"
+                return self.decode_open_message(data, direction=direction)
             except Exception as e:
-                message_info["error"] = f"Failed to decode OPEN: {e}"
+                print(unknown_message)
+                return BGPUnknownMessage(**unknown_message, details={"error": f"Failed to decode OPEN: {e}"})
 
         elif msg_type == 4:  # KEEPALIVE
             try:
-                keepalive_details = self.decode_keepalive_message(data)
-                message_info.update(keepalive_details)
+                return self.decode_keepalive_message(data, direction=direction)
             except Exception as e:
-                message_info["error"] = f"Failed to decode KEEPALIVE: {e}"
+                print(unknown_message)
+                return BGPUnknownMessage(**unknown_message, details=f"Failed to decode KEEPALIVE: {e}")
 
         elif msg_type == 2:  # UPDATE
-            message_info["type_name"] = "UPDATE"
-            message_info["note"] = "UPDATE message not fully parsed"
+            return self.decode_update_message(data, direction=direction)
 
         elif msg_type == 3:  # NOTIFICATION
             try:
                 error_code, error_subcode = struct.unpack("!BB", payload[:2])
-                message_info.update(
-                    {"type_name": "NOTIFICATION", "error_code": error_code, "error_subcode": error_subcode}
+                data_field = payload[2:]
+                return BGPNotificationMessage(
+                    length=len(data),
+                    timestamp=datetime.now(),
+                    direction=direction,
+                    message_type="NOTIFICATION",
+                    details={},
+                    error_code=error_code,
+                    error_subcode=error_subcode,
+                    data=data_field,
                 )
             except Exception as e:
-                message_info["error"] = f"Failed to decode NOTIFICATION: {e}"
+                return BGPUnknownMessage(**unknown_message, details=f"Failed to decode NOTIFICATION: {e}")
 
         else:
-            message_info["type_name"] = f"UNKNOWN_{msg_type}"
+            return BGPUnknownMessage(**unknown_message, details=f"UNKNOWN_{msg_type}")
 
-        return message_info
 
-    def log_message(self, direction: str, message_type: str, details: Dict[str, Any]):
+    def parse_optional_params(self, opt_bytes: bytes):
+        i = 0
+        capabilities = []
+        while i < len(opt_bytes):
+            if i + 2 > len(opt_bytes):
+                print("[!] Truncated optional param header")
+                break
+            param_type, param_len = struct.unpack("!BB", opt_bytes[i:i+2])
+            param_value = opt_bytes[i+2:i+2+param_len]
+            i += 2 + param_len
+
+            print(f"Optional Param: type={param_type}, length={param_len}")
+
+            # Capability
+            if param_type == 2:
+                j = 0
+                while j < len(param_value):
+                    if j + 2 > len(param_value):
+                        print("[!] Truncated capability header")
+                        break
+                    cap_code, cap_len = struct.unpack("!BB", param_value[j:j+2])
+                    cap_value = param_value[j+2:j+2+cap_len]
+                    j += 2 + cap_len
+                    cap = BGPCapability(
+                        code=cap_code,
+                        length=cap_len,
+                        value=cap_value,
+                    )
+                    capabilities.append(cap)
+        return capabilities
+
+
+    def log_message(self, msg):
         """Log BGP message"""
-        message = BGPMessage(timestamp=datetime.now(), direction=direction, message_type=message_type, details=details)
-        self.message_log.append(message)
-        print(f"Logged message: {message}")
+        if msg == {}:
+            return
+
+        self.message_log.append(msg)
+        print(f"Logged message: {msg}")
         # Keep only last 1000 messages
         if len(self.message_log) > 1000:
             self.message_log = self.message_log[-1000:]
 
         # Update stats
-        if direction == "sent":
+        if msg.direction == "sent":
             self.stats.total_messages_sent += 1
         else:
             self.stats.total_messages_received += 1
 
-        if message_type == "OPEN":
+        if msg.message_type == "OPEN":
             self.stats.open_messages += 1
-        elif message_type == "KEEPALIVE":
+        elif msg.message_type == "KEEPALIVE":
             self.stats.keepalive_messages += 1
-        elif message_type == "UPDATE":
+        elif msg.message_type == "UPDATE":
             self.stats.update_messages += 1
-        elif message_type == "NOTIFICATION":
+        elif msg.message_type == "NOTIFICATION":
             self.stats.notification_messages += 1
 
     async def send_keepalives(self):
@@ -186,7 +275,9 @@ class BGPManager:
                     msg = self.build_keepalive_message()
                     self.writer.write(msg)
                     await self.writer.drain()
-                    self.log_message("sent", "KEEPALIVE", {"message": "Periodic keepalive sent"})
+                    sent = self.parse_bgp_message(msg, direction="sent")
+                    self.log_message(sent)
+                    # self.log_message("sent", "KEEPALIVE", {"message": "Periodic keepalive sent"})
             except Exception as e:
                 print(f"Error sending keepalive: {e}")
                 break
@@ -209,7 +300,8 @@ class BGPManager:
             open_msg = self.build_open_message()
             self.writer.write(open_msg)
             await self.writer.drain()
-            self.log_message("sent", "OPEN", {"config": self.connection_status.config.dict()})
+            sent = self.parse_bgp_message(open_msg, direction="sent")
+            self.log_message(sent)
 
             # Start keepalive task
             self.keepalive_task = asyncio.create_task(self.send_keepalives())
@@ -235,9 +327,8 @@ class BGPManager:
                 self.connection_status.last_activity = datetime.now()
                 self.connection_status.messages_received += 1
 
-                message_info = self.parse_bgp_message(data)
-                message_type = message_info.get("type_name", f"TYPE_{message_info.get('type', 'UNKNOWN')}")
-                self.log_message("received", message_type, message_info)
+                msg = self.parse_bgp_message(data, direction="received")
+                self.log_message(msg)
 
         except Exception as e:
             print(f"Error reading messages: {e}")
@@ -293,8 +384,5 @@ class BGPManager:
 
 
 @lru_cache()
-def get_bgp_manager(bgp_config: BGPConfig = BGPConfig()) -> BGPManager:
-    async def _get_bgp_manager():
-        return BGPManager(bgp_config)
-
-    return _get_bgp_manager()
+def get_bgp_manager() -> BGPManager:
+    return BGPManager()

@@ -5,14 +5,14 @@ import uvicorn
 from fastapi import FastAPI
 
 # from tester_service.api.v1.tester import router as tester_router
-from tester_service.api.v1.tester import router as ping_router
+from tester_service.api.v1.tester import router
 from tester_service.core.settings import settings
-from tester_service.services.bgp import BGPManager
+from tester_service.services.bgp import get_bgp_manager
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    mgr = BGPManager()
+    mgr = get_bgp_manager()
     await mgr.start_connection()
     yield
     await mgr.stop_connection()
@@ -27,7 +27,7 @@ app = FastAPI(
 )
 
 
-app.include_router(ping_router, prefix="/api/v1/ping", tags=["ping"])
+app.include_router(router, prefix="/api/v1", tags=["ping"])
 
 
 if __name__ == "__main__":
