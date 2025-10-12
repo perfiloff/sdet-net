@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 # from tester_service.api.v1.tester import router as tester_router
-from tester_service.api.v1.tester import ping as ping_router
+from tester_service.api.v1.tester import router as ping_router
 from tester_service.core.settings import settings
 
 
@@ -26,7 +26,6 @@ app = FastAPI(
 )
 
  
-# app.include_router(tester_router, prefix="/api/v1/tester", tags=["tester"])
 app.include_router(ping_router, prefix="/api/v1/ping", tags=["ping"])
 
 
