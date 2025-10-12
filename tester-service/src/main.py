@@ -3,18 +3,19 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+
 # from tester_service.api.v1.tester import router as tester_router
 from tester_service.api.v1.tester import router as ping_router
 from tester_service.core.settings import settings
+from tester_service.services.bgp import BGPManager
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    # redis.redis = Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True)
-    # logging.info("Инициализация Redis - DONE")
+    mgr = BGPManager()
+    await mgr.start_connection()
     yield
-    # await redis.redis.close()
-    # logging.info("Закрытие подключения к Redis...")
+    await mgr.stop_connection()
 
 
 app = FastAPI(
@@ -25,7 +26,7 @@ app = FastAPI(
     lifespan=app_lifespan,
 )
 
- 
+
 app.include_router(ping_router, prefix="/api/v1/ping", tags=["ping"])
 
 
