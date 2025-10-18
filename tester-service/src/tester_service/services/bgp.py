@@ -93,7 +93,7 @@ class BGPManager:
             timestamp=datetime.now(),
             direction=direction,
             length=length,
-            message_type=msg_type,
+            message_type="OPEN",
             version=version,
             as_number=my_as,
             hold_time=hold_time,
@@ -134,16 +134,108 @@ class BGPManager:
             details={"info": "KEEPALIVE received"},
         )
 
+    def _decode_path_attribute(self, code: int, value: bytes) -> str:
+        if code == 1:  # ORIGIN
+            origin_map = {0: "IGP", 1: "EGP", 2: "INCOMPLETE"}
+            return f"ORIGIN={origin_map.get(value[0], 'Unknown')}"
+        elif code == 2:  # AS_PATH
+            return f"AS_PATH={value.hex()}"
+        elif code == 3:  # NEXT_HOP
+            return f"NEXT_HOP={'.'.join(map(str, value))}"
+        elif code == 4:  # MULTI_EXIT_DISC
+            return f"MED={struct.unpack('!I', value)[0]}"
+        elif code == 5:  # LOCAL_PREF
+            return f"LOCAL_PREF={struct.unpack('!I', value)[0]}"
+        else:
+            return f"Attr[{code}]={value.hex()}"
+
+
     def decode_update_message(self, data: bytes, direction: str):
-        return BGPUpdateMessage(
+        try:
+            # --- Заголовок ---
+            marker = data[:16]
+            length, msg_type = struct.unpack("!HB", data[16:19])
+            payload = data[19:length]
+
+            if msg_type != 2:
+                raise ValueError("Not an UPDATE message")
+
+            pos = 0
+
+            # --- 1. Withdrawn Routes ---
+            withdrawn_len = struct.unpack("!H", payload[pos:pos+2])[0]
+            pos += 2
+            withdrawn_routes = []
+            end_withdrawn = pos + withdrawn_len
+            while pos < end_withdrawn:
+                prefix_len = payload[pos]
+                pos += 1
+                prefix_bytes = (prefix_len + 7) // 8
+                prefix = payload[pos:pos+prefix_bytes]
+                pos += prefix_bytes
+                # нормализуем в IPv4-сеть
+                prefix_bits = list(prefix) + [0] * (4 - prefix_bytes)
+                withdrawn_routes.append(f"{'.'.join(map(str, prefix_bits))}/{prefix_len}")
+
+            # --- 2. Path Attributes ---
+            total_attr_len = struct.unpack("!H", payload[pos:pos+2])[0]
+            pos += 2
+            path_attr_end = pos + total_attr_len
+            path_attributes = []
+
+            while pos < path_attr_end:
+                # Attribute header
+                flags = payload[pos]
+                code = payload[pos + 1]
+                pos += 2
+                if flags & 0x10:  # Extended Length
+                    attr_len = struct.unpack("!H", payload[pos:pos + 2])[0]
+                    pos += 2
+                else:
+                    attr_len = payload[pos]
+                    pos += 1
+                attr_value = payload[pos:pos + attr_len]
+                pos += attr_len
+
+                path_attributes.append({
+                    "flags": flags,
+                    "code": code,
+                    "length": attr_len,
+                    "value": attr_value.hex(),
+                    "readable": self._decode_path_attribute(code, attr_value)
+                })
+
+            # --- 3. NLRI ---
+            nlri = []
+            while pos < len(payload):
+                prefix_len = payload[pos]
+                pos += 1
+                prefix_bytes = (prefix_len + 7) // 8
+                prefix = payload[pos:pos+prefix_bytes]
+                pos += prefix_bytes
+                prefix_bits = list(prefix) + [0] * (4 - prefix_bytes)
+                nlri.append(f"{'.'.join(map(str, prefix_bits))}/{prefix_len}")
+
+            # --- Итог ---
+            return BGPUpdateMessage(
                 length=len(data),
                 timestamp=datetime.now(),
                 direction=direction,
                 message_type="UPDATE",
-                details={"raw": data},
-                withdrawn_routes=[],
-                path_attributes={},
-                nlri=[],
+                details={"withdrawn_count": len(withdrawn_routes), "attr_count": len(path_attributes)},
+                withdrawn_routes=withdrawn_routes,
+                path_attributes=path_attributes,
+                nlri=nlri,
+            )
+
+        except Exception as e:
+            return BGPUnknownMessage(
+                length=len(data),
+                timestamp=datetime.now(),
+                direction=direction,
+                message_type="UNKNOWN",
+                details={"error": f"Failed to decode UPDATE: {e}", "raw_hex": data.hex()},
+                raw_data=data.hex()
             )
 
     def parse_bgp_message(self, data: bytes, direction: str = "received") -> Dict[str, Any]:
@@ -173,14 +265,14 @@ class BGPManager:
             try:
                 return self.decode_open_message(data, direction=direction)
             except Exception as e:
-                print(unknown_message)
+                print(f"Unknowt message type 1\n{unknown_message}")
                 return BGPUnknownMessage(**unknown_message, details={"error": f"Failed to decode OPEN: {e}"})
 
         elif msg_type == 4:  # KEEPALIVE
             try:
                 return self.decode_keepalive_message(data, direction=direction)
             except Exception as e:
-                print(unknown_message)
+                print(f"Unknowt message type 4\n{unknown_message}")
                 return BGPUnknownMessage(**unknown_message, details=f"Failed to decode KEEPALIVE: {e}")
 
         elif msg_type == 2:  # UPDATE

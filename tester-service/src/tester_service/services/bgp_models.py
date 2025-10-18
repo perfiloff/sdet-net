@@ -1,3 +1,5 @@
+from collections import defaultdict
+import struct
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -124,6 +126,21 @@ class BGPOpenMessage(BGPMessage):
             "router_id": self.router_id,
             "capabilities": caps_readable,
         }
+    
+    def to_bytes(self) -> bytes:
+        marker = self.marker or b"\xff" * 16
+        body = struct.pack(
+            "!BHH4sB",
+            self.version,
+            self.my_as,
+            self.hold_time,
+            socket.inet_aton(self.router_id),
+            self.opt_len,
+        )
+        opt_bytes = b"".join(self.opt_params)
+        length = 19 + len(body) + len(opt_bytes)
+        header = struct.pack("!16sHB", marker, length, 1)
+        return header + body + opt_bytes
 
 
 class BGPKeepaliveMessage(BGPMessage):
@@ -136,8 +153,8 @@ class BGPKeepaliveMessage(BGPMessage):
 class BGPUpdateMessage(BGPMessage):
     """BGP UPDATE message"""
 
-    withdrawn_routes: List[str] = []
-    path_attributes: Dict[str, Any] = {}
+    withdrawn_routes: List[str] = list()
+    path_attributes: List[Dict] = list(defaultdict())
     nlri: List[str] = []
 
     def human_details(self) -> Dict[str, Any]:
@@ -169,7 +186,8 @@ class BGPUnknownMessage(BGPMessage):
     raw_data: bytes
 
     def human_details(self) -> Dict[str, Any]:
-        return {"raw_data": self.raw_data.hex()}
+        self.details.update({"raw_data": self.raw_data.hex()})
+        return self.details
 
 
 class BGPStats(BaseModel):
