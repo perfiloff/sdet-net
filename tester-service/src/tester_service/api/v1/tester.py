@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
-from tester_service.services.bgp_models import BGPConnectionStatus
+from tester_service.models.bgp_settings import BGPConnectionStatus
 from tester_service.services.bgp import BGPManager, get_bgp_manager
 from fastapi import Depends
 
