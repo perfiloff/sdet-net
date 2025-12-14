@@ -1,10 +1,11 @@
 import logging
-
-from fastapi import APIRouter
+import asyncio
+from fastapi import APIRouter, Query
 from starlette.requests import Request
 from starlette.responses import Response
 from tester_service.models.bgp_settings import BGPConnectionStatus
 from tester_service.services.bgp import BGPManager, get_bgp_manager
+from tester_service.models.schemas import BGPConfigUpdate
 from fastapi import Depends
 
 
@@ -23,3 +24,26 @@ async def get_status(bgp_manager: BGPManager = Depends(get_bgp_manager)):
     """Get BGP connection status"""
     print(bgp_manager)
     return bgp_manager.get_connection_status()
+
+
+@router.patch("/bgp/config")
+async def update_bgp_config(
+    update: BGPConfigUpdate,
+    reconnect: bool = Query(False),
+    bgp_manager: BGPManager = Depends(get_bgp_manager),
+):
+    result = bgp_manager.update_config(update, reconnect=reconnect)
+
+    if reconnect and bgp_manager.connection_status.connected:
+        await bgp_manager.stop_connection()
+        asyncio.create_task(bgp_manager.start_connection())
+
+    return result
+
+
+@router.get("/bgp/config")
+async def get_bgp_config(
+    bgp_manager: BGPManager = Depends(get_bgp_manager),
+):
+    return bgp_manager.connection_status.config
+    

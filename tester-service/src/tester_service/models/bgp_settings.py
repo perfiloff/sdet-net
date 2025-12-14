@@ -1,13 +1,15 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
-from scapy.contrib.bgp import BGPCapability
 from tester_service.core.settings import bgp_settings
+from tester_service.models.bgp_capabilities import BGPCapabilityModel
 
 
 class BGPConfig(BaseModel):
     """BGP connection configuration"""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     as_number: int = bgp_settings.as_number
     router_id: str = bgp_settings.router_id
@@ -15,7 +17,7 @@ class BGPConfig(BaseModel):
     bgp_version: int = bgp_settings.bgp_version
     remote_host: str = bgp_settings.remote_host
     remote_port: int = bgp_settings.remote_port
-    capabilities: List = Field(default_factory=list)
+    capabilities: list[BGPCapabilityModel] = Field(default_factory=list)
 
 
 class BGPConnectionStatus(BaseModel):

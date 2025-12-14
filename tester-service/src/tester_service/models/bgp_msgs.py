@@ -4,10 +4,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import ClassVar, List, Optional, Dict, Any
 from datetime import datetime
 
-from scapy.fields import ByteEnumField, ByteField, FieldLenField, IPField, MultiEnumField, ShortField, StrField
 from scapy.packet import Raw
 from tester_service.core.settings import bgp_settings
-from scapy.contrib.bgp import BGPNLRIPacketListField, BGPOpen, BGPKeepAlive, BGPOptParamPacketListField, BGPPathAttrPacketListField, BGPUpdate, BGPNotification, BGPHeader
+from scapy.contrib.bgp import BGPOpen, BGPUpdate, BGPNotification, BGPHeader, BGPOptParam
 from tester_service.models.bgp_settings import BGPConfig
 
 class BGPMessage(BaseModel):
@@ -27,8 +26,8 @@ class BGPMessage(BaseModel):
     def message(self):
         return self.header/self.payload
 
-    def show(self):
-        return self.message.show()
+    def show(self, *args, **kwargs):
+        return self.message.show(*args, **kwargs)
 
     def to_bytes(self) -> bytes:
         return bytes(self.message)
@@ -47,8 +46,7 @@ class BGPOpenMessage(BGPMessage):
     my_as: int
     hold_time: int
     bgp_id: str
-    opt_param_len: int
-    opt_params: list
+    opt_params: list[BGPOptParam] = Field(default_factory=list)
 
     @property
     def payload(self) -> BGPOpen:
@@ -57,6 +55,7 @@ class BGPOpenMessage(BGPMessage):
             my_as=self.my_as,
             hold_time=self.hold_time,
             bgp_id=self.bgp_id,
+            opt_params=self.opt_params
             )
 
 
@@ -143,8 +142,7 @@ def build_model_from_scapy(pkt, direction: str):
             my_as=bgp.my_as,
             hold_time=bgp.hold_time,
             bgp_id=bgp.bgp_id,
-            opt_param_len=bgp.opt_param_len,
-            opt_params=list(bgp.opt_params)
+            opt_params=list[BGPOptParam](bgp.opt_params)
         )
 
     elif msg_type == 4:  # KEEPALIVE

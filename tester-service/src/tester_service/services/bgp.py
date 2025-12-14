@@ -53,7 +53,6 @@ class BGPManager:
             my_as=self.connection_status.config.as_number, 
             hold_time=self.connection_status.config.hold_time, 
             bgp_id=self.connection_status.config.router_id,
-            opt_param_len=0,
             opt_params=[]
             )
         return bgp_msg.to_bytes()
@@ -117,7 +116,7 @@ class BGPManager:
             self.stats.update_messages += 1
         elif msg.bgp_type == 3:
             self.stats.notification_messages += 1
-        print(f"MSG STRUCTURE: {msg.show()}")
+        print(f"\n({msg.direction})MSG STRUCTURE:\n{msg.show(dump=True)}")
 
     async def send_keepalives(self):
         """Send periodic keepalive messages"""
@@ -133,43 +132,72 @@ class BGPManager:
                     self.log_message(sent)
                     # self.log_message("sent", "KEEPALIVE", {"message": "Periodic keepalive sent"})
             except Exception as e:
-                print(f"Error sending keepalive: {e}")
-                break
+                print(f"Keepalive failed: {e}")
+                await self.stop_connection()
+                return
+
+    async def _connect_once(self):
+        self.reader, self.writer = await asyncio.open_connection(
+            self.connection_status.config.remote_host,
+            self.connection_status.config.remote_port
+        )
+
+        self.connection_status.connected = True
+        self.connection_status.connection_start_time = datetime.now()
+
+        open_msg = self.build_open_message()
+        self.writer.write(open_msg)
+        await self.writer.drain()
+
+        self.keepalive_task = asyncio.create_task(self.send_keepalives())
+        self.connection_task = asyncio.create_task(self.read_messages())
 
     async def start_connection(self):
-        """Start BGP connection"""
-        if self.connection_status.connected:
-            raise Exception("BGP connection already active")
-
         while True:
             try:
-                self.reader, self.writer = await asyncio.open_connection(
-                    self.connection_status.config.remote_host, self.connection_status.config.remote_port
-                )
-
-                self.connection_status.connected = True
-                self.connection_status.connection_start_time = datetime.now()
-                self.connection_status.last_activity = datetime.now()
-
-                # Send OPEN message
-                open_msg = self.build_open_message()
-                self.writer.write(open_msg)
-                await self.writer.drain()
-                sent = self.parse_bgp_message(open_msg, direction="sent")
-                self.log_message(sent)
-
-                # Start keepalive task
-                self.keepalive_task = asyncio.create_task(self.send_keepalives())
-
-                # Start message reading task
-                self.connection_task = asyncio.create_task(self.read_messages())
-
-                return {"status": "connected", "message": "BGP connection established"}
-
+                await self._connect_once()
+                await self.connection_task
             except Exception as e:
-                self.connection_status.connected = False
-                print(f"Failed to establish BGP connection: {e}")
-                await asyncio.sleep(10)
+                print(f"Connection error: {e}")
+            finally:
+                await self.stop_connection()
+                await asyncio.sleep(5)
+
+    
+    # async def start_connection(self):
+    #     """Start BGP connection"""
+    #     if self.connection_status.connected:
+    #         raise Exception("BGP connection already active")
+
+    #     while True:
+    #         try:
+    #             self.reader, self.writer = await asyncio.open_connection(
+    #                 self.connection_status.config.remote_host, self.connection_status.config.remote_port
+    #             )
+
+    #             self.connection_status.connected = True
+    #             self.connection_status.connection_start_time = datetime.now()
+    #             self.connection_status.last_activity = datetime.now()
+
+    #             # Send OPEN message
+    #             open_msg = self.build_open_message()
+    #             self.writer.write(open_msg)
+    #             await self.writer.drain()
+    #             sent = self.parse_bgp_message(open_msg, direction="sent")
+    #             self.log_message(sent)
+
+    #             # Start keepalive task
+    #             self.keepalive_task = asyncio.create_task(self.send_keepalives())
+
+    #             # Start message reading task
+    #             self.connection_task = asyncio.create_task(self.read_messages())
+
+    #             return {"status": "connected", "message": "BGP connection established"}
+
+    #         except Exception as e:
+    #             self.connection_status.connected = False
+    #             print(f"Failed to establish BGP connection: {e}")
+    #             await asyncio.sleep(10)
 
 
     async def read_messages(self):
@@ -178,14 +206,14 @@ class BGPManager:
             while self.connection_status.connected and self.reader:
                 data = await self.reader.read(4096)
                 if not data:
-                    print(f"{datetime.now()}Connection closed")
-                    break
+                    print("Peer closed TCP session")
+                    return
 
                 self.connection_status.last_activity = datetime.now()
                 self.connection_status.messages_received += 1
 
-                msg = self.parse_bgp_message(data, direction="received")
-                self.log_message(msg)
+                revceived = self.parse_bgp_message(data, direction="received")
+                self.log_message(revceived)
 
         except Exception as e:
             print(f"Error reading messages: {e}")
@@ -206,7 +234,15 @@ class BGPManager:
 
         if self.writer:
             self.writer.close()
-            await self.writer.wait_closed()
+            try:
+                if self.writer.is_closing():
+                    await self.writer.wait_closed()
+                else:
+                    print("Socket was not opened.")
+            except asyncio.exceptions.CancelledError:
+                print("Socket is not ready")
+                await asyncio.sleep(5)
+
             self.writer = None
 
         self.reader = None

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,8 +14,12 @@ from tester_service.services.bgp import get_bgp_manager
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     mgr = get_bgp_manager()
-    await mgr.start_connection()
+    app.state.bgp_manager = mgr
+
+    asyncio.create_task(mgr.start_connection())
+
     yield
+
     await mgr.stop_connection()
 
 
@@ -23,6 +28,8 @@ app = FastAPI(
     description="Testing service",
     summary="Async test API",
     version="0.0.1",
+    docs_url="/api/openapi",
+    openapi_url="/api/openapi.json",
     lifespan=app_lifespan,
 )
 
