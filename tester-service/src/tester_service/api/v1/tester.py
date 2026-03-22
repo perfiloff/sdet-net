@@ -32,7 +32,7 @@ async def update_bgp_config(
     reconnect: bool = Query(False),
     bgp_manager: BGPManager = Depends(get_bgp_manager),
 ):
-    result = bgp_manager.update_config(update, reconnect=reconnect)
+    result = await bgp_manager.update_config(update, reconnect=reconnect)
 
     if reconnect and bgp_manager.connection_status.connected:
         await bgp_manager.stop_connection()
@@ -46,4 +46,3 @@ async def get_bgp_config(
     bgp_manager: BGPManager = Depends(get_bgp_manager),
 ):
     return bgp_manager.connection_status.config
-    

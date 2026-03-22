@@ -3,6 +3,8 @@ from functools import lru_cache
 import struct
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+
+from pydantic import BaseModel
 from tester_service.models.bgp_msgs import (
     BGPMessage, 
     BGPStats,
@@ -15,6 +17,7 @@ from tester_service.models.bgp_msgs import (
     build_model_from_scapy
 )
 from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus, BGPStats
+from tester_service.models.schemas import BGPConfigUpdate
 
 
 class BGPManager:
@@ -91,10 +94,8 @@ class BGPManager:
             )
 
 
-    def log_message(self, msg):
+    def log_message(self, msg: BaseModel):
         """Log BGP message"""
-        if msg == {}:
-            return
 
         self.message_log.append(msg)
         print(f"Logged message: {msg}")
@@ -160,8 +161,9 @@ class BGPManager:
             except Exception as e:
                 print(f"Connection error: {e}")
             finally:
-                await self.stop_connection()
-                await asyncio.sleep(5)
+                if self.connection_status.connected:
+                    await self.stop_connection()
+                    await asyncio.sleep(5)
 
     
     # async def start_connection(self):
@@ -212,16 +214,20 @@ class BGPManager:
                 self.connection_status.last_activity = datetime.now()
                 self.connection_status.messages_received += 1
 
-                revceived = self.parse_bgp_message(data, direction="received")
-                self.log_message(revceived)
+                received = self.parse_bgp_message(data, direction="received")
+                self.log_message(received)
 
         except Exception as e:
             print(f"Error reading messages: {e}")
         finally:
-            await self.stop_connection()
+            if self.connection_status.connected:
+                await self.stop_connection()
 
     async def stop_connection(self):
         """Stop BGP connection"""
+        if not self.connection_status.connected:
+            print("The connection is already down.")
+            return
         self.connection_status.connected = False
 
         if self.keepalive_task:
@@ -247,13 +253,18 @@ class BGPManager:
 
         self.reader = None
 
-    def update_config(self, new_config: BGPConfig):
+    async def update_config(self, new_config: BGPConfigUpdate, reconnect: bool):
         """Update BGP configuration"""
-        if self.connection_status.connected:
-            raise Exception("Cannot update config while connected. Stop connection first.")
+        if self.connection_status.connected and reconnect:
+            await self.stop_connection()
+        for key, value in new_config.model_dump().items():
+            if value is not None:
+                setattr(self.connection_status.config, key, value)
+        if not self.connection_status.connected:
+            await self.start_connection()
 
-        self.connection_status.config = new_config
-        return {"status": "updated", "config": new_config.dict()}
+        return True
+        
 
     def get_connection_status(self) -> BGPConnectionStatus:
         """Get current connection status"""

@@ -16,9 +16,18 @@ async def app_lifespan(app: FastAPI):
     mgr = get_bgp_manager()
     app.state.bgp_manager = mgr
 
-    asyncio.create_task(mgr.start_connection())
+    # Store reference to the connection task so we can cancel it during shutdown
+    connection_task = asyncio.create_task(mgr.start_connection())
 
     yield
+
+    # Cancel the connection task first, then stop the connection
+    if not connection_task.done():
+        connection_task.cancel()
+        try:
+            await connection_task
+        except asyncio.CancelledError:
+            pass
 
     await mgr.stop_connection()
 

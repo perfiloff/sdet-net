@@ -72,9 +72,9 @@ class BGPUpdateMessage(BGPMessage):
     """BGP UPDATE message information"""
     bgp_type: ClassVar[int] = 2
 
-    withdrawn_routes: list = []
-    path_attr: list = []
-    nlri: list = []
+    withdrawn_routes: list = Field(default_factory=list)
+    path_attr: list = Field(default_factory=list)
+    nlri: list = Field(default_factory=list)
 
     @property
     def payload(self):
