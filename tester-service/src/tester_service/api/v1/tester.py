@@ -1,11 +1,12 @@
 import logging
 import asyncio
+from typing import Any, List
 from fastapi import APIRouter, Query
 from starlette.requests import Request
 from starlette.responses import Response
 from tester_service.models.bgp_settings import BGPConnectionStatus
 from tester_service.services.bgp import BGPManager, get_bgp_manager
-from tester_service.models.schemas import BGPConfigUpdate, BGPRouteInjection
+from tester_service.models.schemas import BGPConfigUpdate, BGPRouteInjection, BGPWithdrawRequest
 from fastapi import Depends
 
 
@@ -58,16 +59,15 @@ async def inject_bgp_route(
     return result
 
 
-@router.delete("/bgp/routes/{prefix}/{netmask}")
-async def withdraw_bgp_route(
-    prefix: str,
-    netmask: str,
+@router.delete("/bgp/routes")
+async def withdraw_bgp_routes(
+    request: BGPWithdrawRequest,
     bgp_manager: BGPManager = Depends(get_bgp_manager),
 ):
     """Withdraw a BGP route by prefix"""
-    logger.info(f"Withdrawing route {prefix}/{netmask}")
-    result = await bgp_manager.withdraw_route(prefix, netmask)
+    result = await bgp_manager.withdraw_routes(request)
     return result
+
 
 
 @router.get("/bgp/routes")
@@ -77,4 +77,5 @@ async def get_bgp_routes(
 ):
     """Get the BGP routing table, optionally filtered by route type"""
     routes = bgp_manager.get_routing_table(route_type)
+    print(f"Routes: {routes}")
     return {"routes": routes, "count": len(routes)}

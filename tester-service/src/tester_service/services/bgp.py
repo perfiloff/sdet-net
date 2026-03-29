@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from pydantic import BaseModel
+from scapy.base_classes import Net
 from tester_service.models.bgp_msgs import (
     BGPMessage, 
     BGPStats,
@@ -17,8 +18,8 @@ from tester_service.models.bgp_msgs import (
     build_model_from_scapy
 )
 from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus, BGPStats
-from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection
-from scapy.contrib.bgp import BGPNLRI_IPv4
+from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection, BGPWithdrawRequest
+from scapy.contrib.bgp import BGPNLRI_IPv4, BGPPathAttr
 
 class BGPManager:
     def __init__(self):
@@ -70,14 +71,14 @@ class BGPManager:
         )
         return bgp_msg.to_bytes()
 
-    def build_update_message(self, route_injection: BGPRouteInjection) -> bytes:
+    def build_update_message(self, route_injection: dict) -> bytes:
         """Build BGP UPDATE message for route injection"""
-        from scapy.contrib.bgp import BGPPathAttr
 
         # Build path attributes
         path_attrs = []
 
         # Origin
+        print(f"Origin: {route_injection}")
         origin_attr = BGPPathAttr(type_flags="Transitive", type_code=1, attribute=struct.pack("!B", route_injection.origin))
         path_attrs.append(origin_attr)
 
@@ -365,11 +366,12 @@ class BGPManager:
             # Log the sent message
             sent = self.parse_bgp_message(update_msg, direction="sent")
             self.log_message(sent)
+            print(f"Route injected: {route_injection}, {Net(route_injection.prefix)}")
 
             # Add route to local routing table
             route = BGPRoute(
-                prefix=route_injection.prefix,
-                next_hop=route_injection.next_hop or self.connection_status.config.router_id,
+                prefix=Net(route_injection.prefix),
+                next_hop=Net(route_injection.next_hop or self.connection_status.config.router_id),
                 as_path=route_injection.as_path,
                 origin=route_injection.origin,
                 local_pref=route_injection.local_pref,
@@ -396,31 +398,36 @@ class BGPManager:
             return [route for route in self.routing_table if route.route_type == route_type]
         return self.routing_table.copy()
 
-    async def withdraw_route(self, prefix: str, netmask: str):
-        """Withdraw a route by prefix"""
-        print(f"Withdrawing route f'{prefix}/{netmask}'")
+    async def withdraw_routes(self, request: BGPWithdrawRequest):
+        """Withdraw multiple routes by their prefixes"""
         if not self.connection_status.connected:
             raise Exception("BGP connection not active")
 
         if not self.writer:
             raise Exception("No active BGP connection")
 
-        # Find the route in our table
-        route_to_withdraw = None
-        for route in self.routing_table:
-            if route.prefix == f"{prefix}/{netmask}" and route.route_type == "advertised":
-                route_to_withdraw = route
-                break
+        withdrawn_routes = []
+        removed_count = 0
 
-        if not route_to_withdraw:
-            raise Exception(f"Route {f"{prefix}/{netmask}"} not found in advertised routes")
+        # Validate and collect routes to withdraw
+        for prefix in request.prefixes:
+            # Check if route exists in our advertised routes
+            route_exists = any(
+                route.prefix == prefix and route.route_type == "advertised"
+                for route in self.routing_table
+            )
+
+            if route_exists:
+                withdrawn_routes.append(BGPNLRI_IPv4(prefix=prefix))
+                removed_count += 1
+            else:
+                print(f"Warning: Route {prefix} not found in advertised routes")
+
+        if not withdrawn_routes:
+            return {"status": "warning", "message": "No valid routes to withdraw", "withdrawn_count": 0}
 
         try:
-            # Build UPDATE message with withdrawn routes
-            from scapy.contrib.bgp import BGPPathAttr
-
-            withdrawn_routes = [BGPNLRI_IPv4(prefix=f"{prefix}/{netmask}")]
-
+            # Build UPDATE message with all withdrawn routes
             bgp_msg = BGPUpdateMessage(
                 timestamp=datetime.now(),
                 direction="sent",
@@ -437,13 +444,21 @@ class BGPManager:
             sent = self.parse_bgp_message(update_msg, direction="sent")
             self.log_message(sent)
 
-            # Remove from routing table
-            self.routing_table = [r for r in self.routing_table if not (r.prefix == f"{prefix}/{netmask}" and r.route_type == "advertised")]
+            # Remove withdrawn routes from routing table
+            self.routing_table = [
+                route for route in self.routing_table
+                if not (route.prefix in request.prefixes and route.route_type == "advertised")
+            ]
 
-            return {"status": "success", "message": f"Route {f"{prefix}/{netmask}"} withdrawn"}
+            return {
+                "status": "success",
+                "message": f"Successfully withdrew {removed_count} routes",
+                "withdrawn_count": removed_count,
+                "withdrawn_prefixes": request.prefixes
+            }
 
         except Exception as e:
-            raise Exception(f"Failed to withdraw route: {e}")
+            raise Exception(f"Failed to withdraw routes: {e}")
 
 
 
