@@ -17,8 +17,8 @@ from tester_service.models.bgp_msgs import (
     build_model_from_scapy
 )
 from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus, BGPStats
-from tester_service.models.schemas import BGPConfigUpdate
-
+from tester_service.models.schemas import BGPConfigUpdate, BGPRouteInjection
+from scapy.contrib.bgp import BGPNLRI_IPv4
 
 class BGPManager:
     def __init__(self):
@@ -66,6 +66,70 @@ class BGPManager:
             timestamp=datetime.now(),
             direction="sent",
         )
+        return bgp_msg.to_bytes()
+
+    def build_update_message(self, route_injection: BGPRouteInjection) -> bytes:
+        """Build BGP UPDATE message for route injection"""
+        from scapy.contrib.bgp import BGPPathAttr
+
+        # Build path attributes
+        path_attrs = []
+
+        # Origin
+        origin_attr = BGPPathAttr(type_flags="Transitive", type_code=1, attribute=struct.pack("!B", route_injection.origin))
+        path_attrs.append(origin_attr)
+
+        # AS Path
+        if route_injection.as_path:
+            segment_type = 2  # AS_SEQUENCE
+            segment_length = len(route_injection.as_path)
+
+            as_path_data = struct.pack("!BB", segment_type, segment_length)
+
+            for asn in route_injection.as_path:
+                as_path_data += struct.pack("!H", asn)
+
+            as_path_attr = BGPPathAttr(
+                type_flags="Transitive",
+                type_code=2,
+                attribute=as_path_data
+            )
+            path_attrs.append(as_path_attr)
+
+        # Next Hop
+        next_hop = route_injection.next_hop or self.connection_status.config.router_id
+        next_hop_attr = BGPPathAttr(type_flags="Transitive", type_code=3, attribute=self.ip_to_bytes(next_hop))
+        path_attrs.append(next_hop_attr)
+
+        # Local Preference (optional)
+        if route_injection.local_pref is not None:
+            local_pref_attr = BGPPathAttr(
+                type_flags="Transitive",
+                type_code=5,
+                attribute=struct.pack("!L", route_injection.local_pref)
+            )
+            path_attrs.append(local_pref_attr)
+
+        # MED (optional)
+        if route_injection.med is not None:
+            med_attr = BGPPathAttr(
+                type_flags="Optional",
+                type_code=4,
+                attribute=struct.pack("!L", route_injection.med)
+            )
+            path_attrs.append(med_attr)
+
+        # NLRI
+        nlri = [BGPNLRI_IPv4(prefix=route_injection.prefix)]
+
+        bgp_msg = BGPUpdateMessage(
+            timestamp=datetime.now(),
+            direction="sent",
+            withdrawn_routes=[],
+            path_attr=path_attrs,
+            nlri=nlri
+        )
+        print(f"BGP UPDATE message: {bgp_msg.show(dump=True)}")
         return bgp_msg.to_bytes()
 
 
@@ -281,6 +345,29 @@ class BGPManager:
     def get_message_log(self, limit: int = 100) -> List[BGPMessage]:
         """Get recent message log"""
         return self.message_log[-limit:] if self.message_log else []
+
+    async def inject_route(self, route_injection: BGPRouteInjection):
+        """Inject and advertise a BGP route"""
+        if not self.connection_status.connected:
+            raise Exception("BGP connection not active")
+
+        if not self.writer:
+            raise Exception("No active BGP connection")
+
+        try:
+            # Build and send UPDATE message
+            update_msg = self.build_update_message(route_injection)
+            self.writer.write(update_msg)
+            await self.writer.drain()
+
+            # Log the sent message
+            sent = self.parse_bgp_message(update_msg, direction="sent")
+            self.log_message(sent)
+
+            return {"status": "success", "message": f"Route {route_injection.prefix} injected and advertised"}
+
+        except Exception as e:
+            raise Exception(f"Failed to inject route: {e}")
 
 
 

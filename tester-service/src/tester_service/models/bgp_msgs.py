@@ -27,7 +27,10 @@ class BGPMessage(BaseModel):
         return self.header/self.payload
 
     def show(self, *args, **kwargs):
-        return self.message.show(*args, **kwargs)
+        try:
+            return self.message.show(*args, **kwargs)
+        except Exception:
+            return f"BGPMessage(type={self.bgp_type}, direction={self.direction})"
 
     def to_bytes(self) -> bytes:
         return bytes(self.message)
@@ -156,9 +159,9 @@ def build_model_from_scapy(pkt, direction: str):
         return BGPUpdateMessage(
             timestamp=datetime.now(),
             direction=direction,
-            withdrawn_routes=[r.prefix for r in (bgp.withdrawn or [])],
+            withdrawn_routes=list(bgp.withdrawn_routes or []),
             path_attr=list(bgp.path_attr or []),
-            nlri=[r.prefix for r in (bgp.nlri or [])],
+            nlri=list(bgp.nlri or []),
         )
 
     elif msg_type == 3:  # NOTIFICATION
