@@ -17,7 +17,7 @@ from tester_service.models.bgp_msgs import (
     build_model_from_scapy
 )
 from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus, BGPStats
-from tester_service.models.schemas import BGPConfigUpdate, BGPRouteInjection
+from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection
 from scapy.contrib.bgp import BGPNLRI_IPv4
 
 class BGPManager:
@@ -36,6 +36,8 @@ class BGPManager:
             update_messages=0,
             notification_messages=0,
         )
+        # Routing table state
+        self.routing_table: List[BGPRoute] = []
         print(f"BGPManager initialized with config: {self.connection_status.config}")
 
     def __str__(self):
@@ -364,10 +366,84 @@ class BGPManager:
             sent = self.parse_bgp_message(update_msg, direction="sent")
             self.log_message(sent)
 
+            # Add route to local routing table
+            route = BGPRoute(
+                prefix=route_injection.prefix,
+                next_hop=route_injection.next_hop or self.connection_status.config.router_id,
+                as_path=route_injection.as_path,
+                origin=route_injection.origin,
+                local_pref=route_injection.local_pref,
+                med=route_injection.med,
+                route_type="advertised",
+                timestamp=datetime.now(),
+                source=None
+            )
+
+            # Remove any existing route with the same prefix
+            self.routing_table = [r for r in self.routing_table if r.prefix != route_injection.prefix]
+
+            # Add the new route
+            self.routing_table.append(route)
+
             return {"status": "success", "message": f"Route {route_injection.prefix} injected and advertised"}
 
         except Exception as e:
             raise Exception(f"Failed to inject route: {e}")
+
+    def get_routing_table(self, route_type: str | None = None) -> List[BGPRoute]:
+        """Get the routing table, optionally filtered by route type"""
+        if route_type:
+            return [route for route in self.routing_table if route.route_type == route_type]
+        return self.routing_table.copy()
+
+    async def withdraw_route(self, prefix: str, netmask: str):
+        """Withdraw a route by prefix"""
+        print(f"Withdrawing route f'{prefix}/{netmask}'")
+        if not self.connection_status.connected:
+            raise Exception("BGP connection not active")
+
+        if not self.writer:
+            raise Exception("No active BGP connection")
+
+        # Find the route in our table
+        route_to_withdraw = None
+        for route in self.routing_table:
+            if route.prefix == f"{prefix}/{netmask}" and route.route_type == "advertised":
+                route_to_withdraw = route
+                break
+
+        if not route_to_withdraw:
+            raise Exception(f"Route {f"{prefix}/{netmask}"} not found in advertised routes")
+
+        try:
+            # Build UPDATE message with withdrawn routes
+            from scapy.contrib.bgp import BGPPathAttr
+
+            withdrawn_routes = [BGPNLRI_IPv4(prefix=f"{prefix}/{netmask}")]
+
+            bgp_msg = BGPUpdateMessage(
+                timestamp=datetime.now(),
+                direction="sent",
+                withdrawn_routes=withdrawn_routes,
+                path_attr=[],
+                nlri=[]
+            )
+
+            update_msg = bgp_msg.to_bytes()
+            self.writer.write(update_msg)
+            await self.writer.drain()
+
+            # Log the sent message
+            sent = self.parse_bgp_message(update_msg, direction="sent")
+            self.log_message(sent)
+
+            # Remove from routing table
+            self.routing_table = [r for r in self.routing_table if not (r.prefix == f"{prefix}/{netmask}" and r.route_type == "advertised")]
+
+            return {"status": "success", "message": f"Route {f"{prefix}/{netmask}"} withdrawn"}
+
+        except Exception as e:
+            raise Exception(f"Failed to withdraw route: {e}")
 
 
 

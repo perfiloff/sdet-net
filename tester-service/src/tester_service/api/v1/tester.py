@@ -56,3 +56,25 @@ async def inject_bgp_route(
     """Inject and advertise a BGP route to the neighbor"""
     result = await bgp_manager.inject_route(route)
     return result
+
+
+@router.delete("/bgp/routes/{prefix}/{netmask}")
+async def withdraw_bgp_route(
+    prefix: str,
+    netmask: str,
+    bgp_manager: BGPManager = Depends(get_bgp_manager),
+):
+    """Withdraw a BGP route by prefix"""
+    logger.info(f"Withdrawing route {prefix}/{netmask}")
+    result = await bgp_manager.withdraw_route(prefix, netmask)
+    return result
+
+
+@router.get("/bgp/routes")
+async def get_bgp_routes(
+    route_type: str | None = None,
+    bgp_manager: BGPManager = Depends(get_bgp_manager),
+):
+    """Get the BGP routing table, optionally filtered by route type"""
+    routes = bgp_manager.get_routing_table(route_type)
+    return {"routes": routes, "count": len(routes)}
