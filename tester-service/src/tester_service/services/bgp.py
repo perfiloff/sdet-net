@@ -1,6 +1,5 @@
 import asyncio
 from functools import lru_cache
-import struct
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -12,18 +11,36 @@ from tester_service.models.bgp_msgs import (
     BGPOpenMessage,
     BGPKeepaliveMessage,
     BGPUpdateMessage,
-    BGPNotificationMessage,
     BGPUnknownMessage,
     scapy_decode_bgp,
     build_model_from_scapy
 )
-from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus, BGPStats
+from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus
+from tester_service.models.bgp_capabilities import BGPCapabilityCode, BGPCapabilityModel
 from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection, BGPWithdrawRequest
-from scapy.contrib.bgp import BGPNLRI_IPv4, BGPPathAttr
+from scapy.contrib.bgp import (
+    BGPPAAS4BytesPath,
+    BGPCapFourBytesASN,
+    BGPCapGeneric,
+    BGPCapGracefulRestart,
+    BGPCapMultiprotocol,
+    BGPCapORF,
+    BGPCapORFBlock,
+    BGPPAASPath,
+    BGPPALocalPref,
+    BGPPAMultiExitDisc,
+    BGPPANextHop,
+    BGPPAOrigin,
+    BGPNLRI_IPv4,
+    BGPOptParam,
+    BGPPathAttr,
+    bgp_module_conf,
+)
 
 class BGPManager:
     def __init__(self):
         self.connection_status = BGPConnectionStatus(connected=False, config=BGPConfig())
+        self._sync_as_path_asn_width()
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
         self.connection_task: Optional[asyncio.Task] = None
@@ -48,10 +65,101 @@ class BGPManager:
         """Convert IP address to bytes"""
         return bytes(map(int, ip.split(".")))
 
+    def _sync_as_path_asn_width(self):
+        """Use 4-byte AS_PATH encoding when Four-Octet-AS capability is enabled."""
+        has_four_octet = any(
+            int(cap.code) == int(BGPCapabilityCode.FOUR_OCTET_AS)
+            for cap in self.connection_status.config.capabilities
+        )
+        bgp_module_conf.use_2_bytes_asn = not has_four_octet
+
+    def _capability_data_to_bytes(self, value: Any) -> bytes:
+        """Normalize arbitrary capability payload data to bytes for generic capabilities."""
+        if value is None:
+            return b""
+
+        if isinstance(value, bytes):
+            return value
+
+        if isinstance(value, str):
+            return bytes.fromhex(value)
+
+        if isinstance(value, list):
+            return bytes(value)
+
+        if isinstance(value, dict):
+            if not value:
+                return b""
+            if "hex" in value and isinstance(value["hex"], str):
+                return bytes.fromhex(value["hex"])
+            if "data" in value:
+                return self._capability_data_to_bytes(value["data"])
+
+        raise ValueError(f"Unsupported capability payload format: {type(value).__name__}")
+
+    def _build_open_opt_params(self, capabilities: list[BGPCapabilityModel]) -> list[BGPOptParam]:
+        """Build OPEN optional parameters from configured BGP capabilities."""
+        opt_params: list[BGPOptParam] = []
+
+        for capability in capabilities:
+            cap_code = int(capability.code)
+            cap_value = capability.value or {}
+
+            if cap_code == BGPCapabilityCode.MP_BGP:
+                param_value = BGPCapMultiprotocol(
+                    afi=int(cap_value.get("afi", 1)),
+                    reserved=int(cap_value.get("reserved", 0)),
+                    safi=int(cap_value.get("safi", 1)),
+                )
+            elif cap_code == BGPCapabilityCode.FOUR_OCTET_AS:
+                param_value = BGPCapFourBytesASN(asn=int(cap_value.get("asn", self.connection_status.config.as_number)))
+            elif cap_code == BGPCapabilityCode.GRACEFUL_RESTART:
+                param_value = BGPCapGracefulRestart(
+                    restart_flags=int(cap_value.get("restart_flags", 0)),
+                    restart_time=int(cap_value.get("restart_time", 0)),
+                )
+            elif cap_code == BGPCapabilityCode.ORF:
+                orf_blocks = cap_value.get("orf")
+                if not orf_blocks:
+                    # RFC 5291 minimum ORF payload is one block with zero entries.
+                    orf_blocks = [{"afi": 1, "reserved": 0, "safi": 1, "entries": []}]
+
+                blocks = []
+                for block in orf_blocks:
+                    tuples = [
+                        BGPCapORFBlock.ORFTuple(
+                            orf_type=int(entry.get("orf_type", 64)),
+                            send_receive=int(entry.get("send_receive", 3)),
+                        )
+                        for entry in block.get("entries", [])
+                    ]
+                    blocks.append(
+                        BGPCapORFBlock(
+                            afi=int(block.get("afi", 1)),
+                            reserved=int(block.get("reserved", 0)),
+                            safi=int(block.get("safi", 1)),
+                            entries=tuples,
+                        )
+                    )
+
+                param_value = BGPCapORF(orf=blocks)
+            else:
+                # Use generic packet for capabilities not mapped to a specific Scapy helper.
+                param_value = BGPCapGeneric(
+                    code=cap_code,
+                    cap_data=self._capability_data_to_bytes(cap_value),
+                )
+
+            opt_params.append(BGPOptParam(param_type=2, param_value=param_value))
+
+        return opt_params
+
     def build_open_message(self):
         """
         Build BGP OPEN message.
         """
+        opt_params = self._build_open_opt_params(self.connection_status.config.capabilities)
+
         bgp_msg = BGPOpenMessage(
             timestamp=datetime.now(),
             direction="sent",
@@ -59,7 +167,7 @@ class BGPManager:
             my_as=self.connection_status.config.as_number, 
             hold_time=self.connection_status.config.hold_time, 
             bgp_id=self.connection_status.config.router_id,
-            opt_params=[]
+            opt_params=opt_params,
             )
         return bgp_msg.to_bytes()
 
@@ -73,35 +181,55 @@ class BGPManager:
 
     def build_update_message(self, route_injection: dict) -> bytes:
         """Build BGP UPDATE message for route injection"""
+        self._sync_as_path_asn_width()
 
         # Build path attributes
         path_attrs = []
 
         # Origin
         print(f"Origin: {route_injection}")
-        origin_attr = BGPPathAttr(type_flags="Transitive", type_code=1, attribute=struct.pack("!B", route_injection.origin))
+        origin_attr = BGPPathAttr(
+            type_flags="Transitive",
+            type_code=1,
+            attribute=BGPPAOrigin(origin=int(route_injection.origin)),
+        )
         path_attrs.append(origin_attr)
 
         # AS Path
         if route_injection.as_path:
-            segment_type = 2  # AS_SEQUENCE
-            segment_length = len(route_injection.as_path)
-
-            as_path_data = struct.pack("!BB", segment_type, segment_length)
-
-            for asn in route_injection.as_path:
-                as_path_data += struct.pack("!H", asn)
+            if bgp_module_conf.use_2_bytes_asn:
+                as_path_payload = BGPPAASPath(
+                    segments=[
+                        BGPPAASPath.ASPathSegment(
+                            segment_type=2,  # AS_SEQUENCE
+                            segment_value=[int(asn) for asn in route_injection.as_path],
+                        )
+                    ]
+                )
+            else:
+                as_path_payload = BGPPAAS4BytesPath(
+                    segments=[
+                        BGPPAAS4BytesPath.ASPathSegment(
+                            segment_type=2,  # AS_SEQUENCE
+                            segment_value=[int(asn) for asn in route_injection.as_path],
+                        )
+                    ]
+                )
 
             as_path_attr = BGPPathAttr(
                 type_flags="Transitive",
                 type_code=2,
-                attribute=as_path_data
+                attribute=as_path_payload,
             )
             path_attrs.append(as_path_attr)
 
         # Next Hop
         next_hop = route_injection.next_hop or self.connection_status.config.router_id
-        next_hop_attr = BGPPathAttr(type_flags="Transitive", type_code=3, attribute=self.ip_to_bytes(next_hop))
+        next_hop_attr = BGPPathAttr(
+            type_flags="Transitive",
+            type_code=3,
+            attribute=BGPPANextHop(next_hop=next_hop),
+        )
         path_attrs.append(next_hop_attr)
 
         # Local Preference (optional)
@@ -109,7 +237,7 @@ class BGPManager:
             local_pref_attr = BGPPathAttr(
                 type_flags="Transitive",
                 type_code=5,
-                attribute=struct.pack("!L", route_injection.local_pref)
+                attribute=BGPPALocalPref(local_pref=int(route_injection.local_pref)),
             )
             path_attrs.append(local_pref_attr)
 
@@ -118,7 +246,7 @@ class BGPManager:
             med_attr = BGPPathAttr(
                 type_flags="Optional",
                 type_code=4,
-                attribute=struct.pack("!L", route_injection.med)
+                attribute=BGPPAMultiExitDisc(med=int(route_injection.med)),
             )
             path_attrs.append(med_attr)
 
@@ -327,6 +455,7 @@ class BGPManager:
         for key, value in new_config.model_dump().items():
             if value is not None:
                 setattr(self.connection_status.config, key, value)
+        self._sync_as_path_asn_width()
         if not self.connection_status.connected:
             await self.start_connection()
 

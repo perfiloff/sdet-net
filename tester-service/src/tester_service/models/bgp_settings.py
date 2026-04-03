@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
+from copy import deepcopy
 
 from tester_service.core.settings import bgp_settings
 from tester_service.models.bgp_capabilities import BGPCapabilityModel
@@ -17,7 +18,7 @@ class BGPConfig(BaseModel):
     bgp_version: int = bgp_settings.bgp_version
     remote_host: str = bgp_settings.remote_host
     remote_port: int = bgp_settings.remote_port
-    capabilities: list[BGPCapabilityModel] = Field(default_factory=list)
+    capabilities: list[BGPCapabilityModel] = Field(default_factory=lambda: deepcopy(bgp_settings.capabilities))
 
 
 class BGPConnectionStatus(BaseModel):

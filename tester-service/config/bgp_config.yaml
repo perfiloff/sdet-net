@@ -1,0 +1,29 @@
+bgp:
+  as_number: 65001
+  router_id: "2.2.2.2"
+  hold_time: 180
+  bgp_version: 4
+  remote_host: "frr"
+  remote_port: 179
+  capabilities:
+    - code: 1  # MP_BGP
+      value:
+        afi: 1
+        reserved: 0
+        safi: 1
+    - code: 2  # ROUTE_REFRESH
+      value: {}
+    - code: 3  # ORF
+      value:
+        orf:
+          - afi: 1
+            reserved: 0
+            safi: 1
+            entries: []
+    - code: 64  # GRACEFUL_RESTART
+      value:
+        restart_flags: 0
+        restart_time: 120
+    - code: 65  # FOUR_OCTET_AS
+      value:
+        asn: 65001
