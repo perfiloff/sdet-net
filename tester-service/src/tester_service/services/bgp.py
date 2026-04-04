@@ -97,6 +97,94 @@ class BGPManager:
 
         raise ValueError(f"Unsupported capability payload format: {type(value).__name__}")
 
+    def _to_cidr(self, prefix: Any) -> str:
+        """Normalize route prefix objects to CIDR string form."""
+        if isinstance(prefix, str):
+            return prefix
+
+        if isinstance(prefix, Net):
+            return f"{prefix}/{prefix.mask}" if prefix.mask != 32 else str(prefix)
+
+        if hasattr(prefix, "prefix"):
+            return self._to_cidr(prefix.prefix)
+
+        return str(prefix)
+
+    def _extract_update_attrs(self, path_attrs: list[Any]) -> dict[str, Any]:
+        """Extract key routing attributes from Scapy BGP path attributes."""
+        attrs: dict[str, Any] = {
+            "origin": 0,
+            "as_path": [],
+            "next_hop": None,
+            "local_pref": None,
+            "med": None,
+        }
+
+        for path_attr in path_attrs or []:
+            attr = getattr(path_attr, "attribute", None)
+            type_code = getattr(path_attr, "type_code", None)
+
+            if type_code == 1 and hasattr(attr, "origin"):
+                attrs["origin"] = int(attr.origin)
+            elif type_code in (2, 17) and hasattr(attr, "segments"):
+                as_path: list[int] = []
+                for segment in attr.segments:
+                    as_path.extend(int(asn) for asn in getattr(segment, "segment_value", []))
+                attrs["as_path"] = as_path
+            elif type_code == 3 and hasattr(attr, "next_hop"):
+                attrs["next_hop"] = str(attr.next_hop)
+            elif type_code == 5 and hasattr(attr, "local_pref"):
+                attrs["local_pref"] = int(attr.local_pref)
+            elif type_code == 4 and hasattr(attr, "med"):
+                attrs["med"] = int(attr.med)
+
+        return attrs
+
+    def _update_learned_routes(self, msg: BGPUpdateMessage):
+        """Apply received UPDATE NLRIs/withdrawals to learned routes table state."""
+        source = self.connection_status.config.remote_host
+
+        withdrawn_prefixes = {
+            self._to_cidr(withdrawn)
+            for withdrawn in (msg.withdrawn_routes or [])
+        }
+        if withdrawn_prefixes:
+            self.routing_table = [
+                route
+                for route in self.routing_table
+                if not (
+                    route.route_type == "learned"
+                    and self._to_cidr(route.prefix) in withdrawn_prefixes
+                )
+            ]
+
+        attrs = self._extract_update_attrs(msg.path_attr or [])
+        next_hop = attrs["next_hop"] or "0.0.0.0"
+
+        for nlri in msg.nlri or []:
+            prefix = self._to_cidr(nlri)
+
+            # Replace any older learned route for the same prefix.
+            self.routing_table = [
+                route
+                for route in self.routing_table
+                if not (route.route_type == "learned" and self._to_cidr(route.prefix) == prefix)
+            ]
+
+            self.routing_table.append(
+                BGPRoute(
+                    prefix=prefix,
+                    next_hop=next_hop,
+                    as_path=attrs["as_path"],
+                    origin=attrs["origin"],
+                    local_pref=attrs["local_pref"],
+                    med=attrs["med"],
+                    route_type="learned",
+                    timestamp=datetime.now(),
+                    source=source,
+                )
+            )
+
     def _build_open_opt_params(self, capabilities: list[BGPCapabilityModel]) -> list[BGPOptParam]:
         """Build OPEN optional parameters from configured BGP capabilities."""
         opt_params: list[BGPOptParam] = []
@@ -196,32 +284,36 @@ class BGPManager:
         path_attrs.append(origin_attr)
 
         # AS Path
-        if route_injection.as_path:
-            if bgp_module_conf.use_2_bytes_asn:
-                as_path_payload = BGPPAASPath(
-                    segments=[
-                        BGPPAASPath.ASPathSegment(
-                            segment_type=2,  # AS_SEQUENCE
-                            segment_value=[int(asn) for asn in route_injection.as_path],
-                        )
-                    ]
+        if bgp_module_conf.use_2_bytes_asn:
+            segments=[
+                BGPPAASPath.ASPathSegment(
+                    segment_type=2,  # AS_SEQUENCE
+                    segment_value=[int(asn) for asn in route_injection.as_path],
                 )
+            ]
+            if route_injection.as_path:
+                as_path_payload = BGPPAASPath(segments=segments)
             else:
-                as_path_payload = BGPPAAS4BytesPath(
-                    segments=[
-                        BGPPAAS4BytesPath.ASPathSegment(
-                            segment_type=2,  # AS_SEQUENCE
-                            segment_value=[int(asn) for asn in route_injection.as_path],
-                        )
-                    ]
-                )
+                as_path_payload = BGPPAASPath()    
+        else:
+            segments=[
+                    BGPPAAS4BytesPath.ASPathSegment(
+                        segment_type=2,  # AS_SEQUENCE
+                        segment_value=[int(asn) for asn in route_injection.as_path],
+                    )
+                ]
+            if route_injection.as_path:
+                as_path_payload = BGPPAAS4BytesPath(segments=segments)
+            else:
+                as_path_payload = BGPPAASPath()
 
-            as_path_attr = BGPPathAttr(
-                type_flags="Transitive",
-                type_code=2,
-                attribute=as_path_payload,
-            )
-            path_attrs.append(as_path_attr)
+
+        as_path_attr = BGPPathAttr(
+            type_flags="Transitive",
+            type_code=2,
+            attribute=as_path_payload,
+        )
+        path_attrs.append(as_path_attr)
 
         # Next Hop
         next_hop = route_injection.next_hop or self.connection_status.config.router_id
@@ -410,6 +502,8 @@ class BGPManager:
                 self.connection_status.messages_received += 1
 
                 received = self.parse_bgp_message(data, direction="received")
+                if getattr(received, "bgp_type", None) == 2:
+                    self._update_learned_routes(received)
                 self.log_message(received)
 
         except Exception as e:
