@@ -56,6 +56,11 @@ class BGPRoute(BaseModel):
         return value
 
 
+class BGPRouteInjectionBatch(BaseModel):
+    """Model for injecting multiple BGP routes in a single request"""
+    routes: list[BGPRouteInjection] = Field(..., description="List of routes to inject")
+
+
 class BGPWithdrawRequest(BaseModel):
     """Model for withdrawing multiple BGP routes"""
 

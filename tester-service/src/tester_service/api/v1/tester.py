@@ -6,7 +6,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from tester_service.models.bgp_settings import BGPConnectionStatus
 from tester_service.services.bgp import BGPManager, get_bgp_manager
-from tester_service.models.schemas import BGPConfigUpdate, BGPRouteInjection, BGPWithdrawRequest
+from tester_service.models.schemas import BGPConfigUpdate, BGPRouteInjection, BGPRouteInjectionBatch, BGPWithdrawRequest
 from fastapi import Depends
 
 
@@ -50,12 +50,12 @@ async def get_bgp_config(
 
 
 @router.post("/bgp/routes/inject")
-async def inject_bgp_route(
-    route: BGPRouteInjection,
+async def inject_bgp_routes(
+    batch: BGPRouteInjectionBatch,
     bgp_manager: BGPManager = Depends(get_bgp_manager),
 ):
-    """Inject and advertise a BGP route to the neighbor"""
-    result = await bgp_manager.inject_route(route)
+    """Inject and advertise one or more BGP routes to the neighbor"""
+    result = await bgp_manager.inject_routes(batch)
     return result
 
 

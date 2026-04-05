@@ -17,7 +17,7 @@ from tester_service.models.bgp_msgs import (
 )
 from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus
 from tester_service.models.bgp_capabilities import BGPCapabilityCode, BGPCapabilityModel
-from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection, BGPWithdrawRequest
+from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection, BGPRouteInjectionBatch, BGPWithdrawRequest
 from scapy.contrib.bgp import (
     BGPPAAS4BytesPath,
     BGPCapFourBytesASN,
@@ -380,6 +380,111 @@ class BGPManager:
                 details={"error": f"Failed to build model: {e}"},
             )
 
+    def _same_route_attrs(self, left: BGPRouteInjection, right: BGPRouteInjection) -> bool:
+        """Return True when two routes share the exact same path attributes."""
+        left_next_hop = left.next_hop or self.connection_status.config.router_id
+        right_next_hop = right.next_hop or self.connection_status.config.router_id
+
+        return (
+            left.origin == right.origin
+            and left.as_path == right.as_path
+            and left_next_hop == right_next_hop
+            and left.local_pref == right.local_pref
+            and left.med == right.med
+        )
+
+    def _build_grouped_update_message(self, routes: list[BGPRouteInjection]) -> bytes:
+        """Build one UPDATE message with shared path attributes and all route NLRIs."""
+        ref = routes[0]  # all routes in the group share the same attrs
+
+        path_attrs = []
+
+        path_attrs.append(BGPPathAttr(
+            type_flags="Transitive",
+            type_code=1,
+            attribute=BGPPAOrigin(origin=int(ref.origin)),
+        ))
+
+        if bgp_module_conf.use_2_bytes_asn:
+            as_path_payload = (
+                BGPPAASPath(segments=[BGPPAASPath.ASPathSegment(segment_type=2, segment_value=[int(a) for a in ref.as_path])])
+                if ref.as_path else BGPPAASPath()
+            )
+        else:
+            as_path_payload = (
+                BGPPAAS4BytesPath(segments=[BGPPAAS4BytesPath.ASPathSegment(segment_type=2, segment_value=[int(a) for a in ref.as_path])])
+                if ref.as_path else BGPPAASPath()
+            )
+
+        path_attrs.append(BGPPathAttr(
+            type_flags="Transitive",
+            type_code=2,
+            attribute=as_path_payload,
+        ))
+
+        next_hop = ref.next_hop or self.connection_status.config.router_id
+        path_attrs.append(BGPPathAttr(
+            type_flags="Transitive",
+            type_code=3,
+            attribute=BGPPANextHop(next_hop=next_hop),
+        ))
+
+        if ref.local_pref is not None:
+            path_attrs.append(BGPPathAttr(
+                type_flags="Transitive",
+                type_code=5,
+                attribute=BGPPALocalPref(local_pref=int(ref.local_pref)),
+            ))
+
+        if ref.med is not None:
+            path_attrs.append(BGPPathAttr(
+                type_flags="Optional",
+                type_code=4,
+                attribute=BGPPAMultiExitDisc(med=int(ref.med)),
+            ))
+
+        nlri = [BGPNLRI_IPv4(prefix=r.prefix) for r in routes]
+
+        bgp_msg = BGPUpdateMessage(
+            timestamp=datetime.now(),
+            direction="sent",
+            withdrawn_routes=[],
+            path_attr=path_attrs,
+            nlri=nlri,
+        )
+        return bgp_msg.to_bytes()
+
+    def _split_group_by_message_size(self, routes: list[BGPRouteInjection], max_size: int = 4096) -> list[list[BGPRouteInjection]]:
+        """Split a route group so each resulting UPDATE message is <= max_size bytes."""
+        if not routes:
+            return []
+
+        chunks: list[list[BGPRouteInjection]] = []
+        current: list[BGPRouteInjection] = []
+
+        for route in routes:
+            candidate = current + [route]
+            if len(self._build_grouped_update_message(candidate)) <= max_size:
+                current = candidate
+                continue
+
+            if not current:
+                raise Exception(
+                    f"Route {route.prefix} exceeds max BGP UPDATE size {max_size} bytes by itself"
+                )
+
+            chunks.append(current)
+            current = [route]
+
+            if len(self._build_grouped_update_message(current)) > max_size:
+                raise Exception(
+                    f"Route {route.prefix} exceeds max BGP UPDATE size {max_size} bytes by itself"
+                )
+
+        if current:
+            chunks.append(current)
+
+        return chunks
 
     def log_message(self, msg: BaseModel):
         """Log BGP message"""
@@ -614,6 +719,84 @@ class BGPManager:
 
         except Exception as e:
             raise Exception(f"Failed to inject route: {e}")
+
+    async def inject_routes(self, batch: BGPRouteInjectionBatch) -> dict:
+        """Inject multiple BGP routes grouped by shared path attributes.
+
+        Routes that share the same origin, as_path, next_hop, local_pref, and med
+        are packed into a single UPDATE message with multiple NLRI prefixes instead
+        of sending one UPDATE per route.
+        """
+        if not self.connection_status.connected:
+            raise Exception("BGP connection not active")
+        if not self.writer:
+            raise Exception("No active BGP connection")
+
+        self._sync_as_path_asn_width()
+
+        # Collect all routes then group by exact attribute equality.
+        groups: list[list[BGPRouteInjection]] = []
+        for route in batch.routes:
+            added = False
+            for group in groups:
+                if self._same_route_attrs(route, group[0]):
+                    group.append(route)
+                    added = True
+                    break
+            if not added:
+                groups.append([route])
+
+        results = []
+        injected = 0
+        failed = 0
+
+        updates_sent = 0
+
+        for group_routes in groups:
+            try:
+                for chunk_routes in self._split_group_by_message_size(group_routes, max_size=4096):
+                    update_msg = self._build_grouped_update_message(chunk_routes)
+                    self.writer.write(update_msg)
+                    await self.writer.drain()
+
+                    sent = self.parse_bgp_message(update_msg, direction="sent")
+                    self.log_message(sent)
+                    updates_sent += 1
+
+                    now = datetime.now()
+                    next_hop = chunk_routes[0].next_hop or self.connection_status.config.router_id
+                    for route in chunk_routes:
+                        self.routing_table = [
+                            r for r in self.routing_table
+                            if not (self._to_cidr(r.prefix) == route.prefix and r.route_type == "advertised")
+                        ]
+                        self.routing_table.append(BGPRoute(
+                            prefix=route.prefix,
+                            next_hop=next_hop,
+                            as_path=route.as_path,
+                            origin=route.origin,
+                            local_pref=route.local_pref,
+                            med=route.med,
+                            route_type="advertised",
+                            timestamp=now,
+                            source=None,
+                        ))
+                        results.append({"prefix": route.prefix, "status": "success"})
+                        injected += 1
+
+            except Exception as e:
+                for route in group_routes:
+                    results.append({"prefix": route.prefix, "status": "failed", "error": str(e)})
+                failed += len(group_routes)
+
+        return {
+            "injected": injected,
+            "failed": failed,
+            "groups": len(groups),
+            "updates_sent": updates_sent,
+            "max_update_size": 4096,
+            "results": results,
+        }
 
     def get_routing_table(self, route_type: str | None = None) -> List[BGPRoute]:
         """Get the routing table, optionally filtered by route type"""
