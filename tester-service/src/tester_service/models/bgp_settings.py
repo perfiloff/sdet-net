@@ -1,3 +1,4 @@
+from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
@@ -5,6 +6,17 @@ from copy import deepcopy
 
 from tester_service.core.settings import bgp_settings
 from tester_service.models.bgp_capabilities import BGPCapabilityModel
+
+
+class BGPFSMState(str, Enum):
+    """RFC 4271 BGP Finite State Machine states."""
+
+    IDLE = "Idle"
+    CONNECT = "Connect"
+    ACTIVE = "Active"
+    OPENSENT = "OpenSent"
+    OPENCONFIRM = "OpenConfirm"
+    ESTABLISHED = "Established"
 
 
 class BGPConfig(BaseModel):
@@ -24,7 +36,9 @@ class BGPConfig(BaseModel):
 class BGPConnectionStatus(BaseModel):
     """BGP connection status"""
 
-    connected: bool
+
+    connected: bool = False
+    state: BGPFSMState = BGPFSMState.IDLE
     config: BGPConfig
     last_activity: Optional[datetime] = None
     messages_sent: int = 0

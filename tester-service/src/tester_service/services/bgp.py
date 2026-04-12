@@ -15,7 +15,7 @@ from tester_service.models.bgp_msgs import (
     scapy_decode_bgp,
     build_model_from_scapy
 )
-from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus
+from tester_service.models.bgp_settings import BGPConfig, BGPConnectionStatus, BGPFSMState
 from tester_service.models.bgp_capabilities import BGPCapabilityCode, BGPCapabilityModel
 from tester_service.models.schemas import BGPConfigUpdate, BGPRoute, BGPRouteInjection, BGPRouteInjectionBatch, BGPWithdrawRequest
 from scapy.contrib.bgp import (
@@ -37,9 +37,10 @@ from scapy.contrib.bgp import (
     bgp_module_conf,
 )
 
+
 class BGPManager:
     def __init__(self):
-        self.connection_status = BGPConnectionStatus(connected=False, config=BGPConfig())
+        self.connection_status = BGPConnectionStatus(config=BGPConfig())
         self._sync_as_path_asn_width()
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
@@ -64,6 +65,21 @@ class BGPManager:
     def ip_to_bytes(self, ip: str) -> bytes:
         """Convert IP address to bytes"""
         return bytes(map(int, ip.split(".")))
+
+    def _set_state(self, state: BGPFSMState):
+        """Apply FSM state and keep compatibility connected flag in sync."""
+        print(f"Transitioning from state: {self.connection_status.state} to state: {state}")
+        self.connection_status.state = state
+        self.connection_status.connected = state == BGPFSMState.ESTABLISHED
+
+        # Uptime should represent time since entering Established.
+        if state != BGPFSMState.ESTABLISHED:
+            self.connection_status.connection_start_time = None
+
+    @property
+    def is_transport_up(self) -> bool:
+        """Return whether TCP transport is currently available."""
+        return bool(self.writer and not self.writer.is_closing())
 
     def _sync_as_path_asn_width(self):
         """Use 4-byte AS_PATH encoding when Four-Octet-AS capability is enabled."""
@@ -514,7 +530,7 @@ class BGPManager:
     async def send_keepalives(self):
         """Send periodic keepalive messages"""
         interval = self.connection_status.config.hold_time // 3
-        while self.connection_status.connected and self.writer:
+        while self.connection_status.state == BGPFSMState.ESTABLISHED and self.writer:
             try:
                 await asyncio.sleep(interval)
                 if self.writer and not self.writer.is_closing():
@@ -529,75 +545,60 @@ class BGPManager:
                 await self.stop_connection()
                 return
 
+    async def _send_keepalive_once(self):
+        """Send one KEEPALIVE, typically during OPEN negotiation."""
+        if not self.writer or self.writer.is_closing():
+            return
+
+        msg = self.build_keepalive_message()
+        self.writer.write(msg)
+        await self.writer.drain()
+        sent = self.parse_bgp_message(msg, direction="sent")
+        self.log_message(sent)
+
+    def _ensure_keepalive_task(self):
+        """Start periodic keepalives only once we are Established."""
+        if self.keepalive_task and not self.keepalive_task.done():
+            return
+        self.keepalive_task = asyncio.create_task(self.send_keepalives())
+
     async def _connect_once(self):
+        self._set_state(BGPFSMState.CONNECT)
         self.reader, self.writer = await asyncio.open_connection(
             self.connection_status.config.remote_host,
             self.connection_status.config.remote_port
         )
 
-        self.connection_status.connected = True
-        self.connection_status.connection_start_time = datetime.now()
+        self._set_state(BGPFSMState.OPENSENT)
 
         open_msg = self.build_open_message()
         self.writer.write(open_msg)
         await self.writer.drain()
+        sent = self.parse_bgp_message(open_msg, direction="sent")
+        self.log_message(sent)
 
-        self.keepalive_task = asyncio.create_task(self.send_keepalives())
         self.connection_task = asyncio.create_task(self.read_messages())
 
     async def start_connection(self):
         while True:
             try:
                 await self._connect_once()
-                await self.connection_task
+                if self.connection_task:
+                    await self.connection_task
             except Exception as e:
+                self._set_state(BGPFSMState.ACTIVE)
                 print(f"Connection error: {e}")
             finally:
-                if self.connection_status.connected:
+                if self.is_transport_up or self.reader or self.connection_status.state != BGPFSMState.IDLE:
                     await self.stop_connection()
-                    await asyncio.sleep(5)
-
-    
-    # async def start_connection(self):
-    #     """Start BGP connection"""
-    #     if self.connection_status.connected:
-    #         raise Exception("BGP connection already active")
-
-    #     while True:
-    #         try:
-    #             self.reader, self.writer = await asyncio.open_connection(
-    #                 self.connection_status.config.remote_host, self.connection_status.config.remote_port
-    #             )
-
-    #             self.connection_status.connected = True
-    #             self.connection_status.connection_start_time = datetime.now()
-    #             self.connection_status.last_activity = datetime.now()
-
-    #             # Send OPEN message
-    #             open_msg = self.build_open_message()
-    #             self.writer.write(open_msg)
-    #             await self.writer.drain()
-    #             sent = self.parse_bgp_message(open_msg, direction="sent")
-    #             self.log_message(sent)
-
-    #             # Start keepalive task
-    #             self.keepalive_task = asyncio.create_task(self.send_keepalives())
-
-    #             # Start message reading task
-    #             self.connection_task = asyncio.create_task(self.read_messages())
-
-    #             return {"status": "connected", "message": "BGP connection established"}
-
-    #         except Exception as e:
-    #             self.connection_status.connected = False
-    #             print(f"Failed to establish BGP connection: {e}")
-    #             await asyncio.sleep(10)
+                self._set_state(BGPFSMState.ACTIVE)
+                await asyncio.sleep(5)
 
 
     async def read_messages(self):
         """Read and process BGP messages"""
         try:
-            while self.connection_status.connected and self.reader:
+            while self.reader and self.connection_status.state != BGPFSMState.IDLE:
                 data = await self.reader.read(4096)
                 if not data:
                     print("Peer closed TCP session")
@@ -607,22 +608,38 @@ class BGPManager:
                 self.connection_status.messages_received += 1
 
                 received = self.parse_bgp_message(data, direction="received")
-                if getattr(received, "bgp_type", None) == 2:
+
+                msg_type = getattr(received, "bgp_type", None)
+
+                if msg_type == 1 and self.connection_status.state == BGPFSMState.OPENSENT:
+                    await self._send_keepalive_once()
+                    self._set_state(BGPFSMState.OPENCONFIRM)
+                elif msg_type == 4 and self.connection_status.state in {BGPFSMState.OPENSENT, BGPFSMState.OPENCONFIRM}:
+                    self._set_state(BGPFSMState.ESTABLISHED)
+                    self.connection_status.connection_start_time = datetime.now()
+                    self._ensure_keepalive_task()
+                elif msg_type == 3:
+                    print("Received BGP NOTIFICATION, closing session")
+                    await self.stop_connection()
+                    return
+
+                if msg_type == 2 and self.connection_status.state == BGPFSMState.ESTABLISHED:
                     self._update_learned_routes(received)
                 self.log_message(received)
 
         except Exception as e:
             print(f"Error reading messages: {e}")
         finally:
-            if self.connection_status.connected:
+            if self.is_transport_up or self.reader:
                 await self.stop_connection()
 
     async def stop_connection(self):
         """Stop BGP connection"""
-        if not self.connection_status.connected:
+        if not self.is_transport_up and not self.reader and self.connection_status.state == BGPFSMState.IDLE:
             print("The connection is already down.")
             return
-        self.connection_status.connected = False
+
+        self._set_state(BGPFSMState.IDLE)
 
         if self.keepalive_task:
             self.keepalive_task.cancel()
@@ -647,16 +664,19 @@ class BGPManager:
 
         self.reader = None
 
+    async def reset_connection(self):
+        """Stop the current BGP session and start a new one with the current config."""
+        await self.stop_connection()
+        asyncio.create_task(self.start_connection())
+
     async def update_config(self, new_config: BGPConfigUpdate, reconnect: bool):
         """Update BGP configuration"""
-        if self.connection_status.connected and reconnect:
-            await self.stop_connection()
         for key, value in new_config.model_dump().items():
             if value is not None:
                 setattr(self.connection_status.config, key, value)
         self._sync_as_path_asn_width()
-        if not self.connection_status.connected:
-            await self.start_connection()
+        if reconnect:
+            await self.reset_connection()
 
         return True
         
