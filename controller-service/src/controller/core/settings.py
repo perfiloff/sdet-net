@@ -22,6 +22,11 @@ def _resolve_yaml_path() -> Path:
     return _DEFAULT_YAML
 
 
+def config_yaml_path() -> Path:
+    """Path to the controller YAML file (``CONTROLLER_CONFIG_FILE`` or package default)."""
+    return _resolve_yaml_path()
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",

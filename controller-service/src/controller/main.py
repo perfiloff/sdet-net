@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
+from controller.api.v1.config_hosts import router as config_hosts_router
 from controller.api.v1.controller import router
 from controller.core.settings import settings
 from controller.core.state import AppContainer
@@ -42,6 +43,7 @@ app = FastAPI(
 
 
 app.include_router(router, prefix="/api/v1", tags=["controller"])
+app.include_router(config_hosts_router, prefix="/api/v1", tags=["config"])
 
 
 if __name__ == "__main__":

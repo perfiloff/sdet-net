@@ -22,5 +22,9 @@ class AppContainer:
     def vtysh_session_store(self) -> VtyshSessionStore:
         return self._vtysh_session_store
 
+    def apply_settings(self, new_settings: Settings) -> None:
+        """Replace in-memory settings after config file changes (active sessions unchanged)."""
+        self.settings = new_settings
+
     async def shutdown(self) -> None:
         await self._vtysh_session_store.close_all()
