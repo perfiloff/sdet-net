@@ -1,0 +1,33 @@
+# Controller service defaults (override with env vars or `.env`).
+# Keys use field names (snake_case). Set CONTROLLER_CONFIG_FILE to use another path.
+
+project_name: controller
+debug: false
+
+docker_socket: unix:///var/run/docker.sock
+container_frr: frr
+container_tester: tester
+
+# Legacy single DUT (used when dut_devices is empty)
+dut_ssh_host: frr
+dut_ssh_port: 22
+dut_ssh_username: root
+dut_ssh_password: null
+dut_ssh_known_hosts: null
+dut_command_timeout: 60.0
+
+# Multiple DUTs: bootstrap opens one interactive vtysh session per entry.
+# If non-empty, these entries are used instead of dut_ssh_* above for sessions and API targeting.
+dut_devices:
+  - host: 172.20.0.2
+    port: 22
+    username: root
+    password: rootpassword
+  - host: frr
+    port: 22
+    username: root
+    password: rootpassword
+  # - host: another-router
+  #   port: 22
+  #   username: root
+  #   password: null

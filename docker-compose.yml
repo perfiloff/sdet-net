@@ -1,14 +1,27 @@
+networks:
+  lab:
+    driver: bridge
+
 services:
   frr:
-    image: frrouting/frr:v8.4.1
+    build:
+      context: .
+      dockerfile: dut-service/Dockerfile
+    image: sdet-frr:local
     container_name: frr
-    privileged: true            # нужно для запуска BGP
+    privileged: true
     volumes:
       - ./dut-service/frr.conf:/etc/frr/frr.conf
       - ./dut-service/daemons:/etc/frr/daemons
     ports:
-      - "179:179"              # BGP порт наружу
-  
+      - "179:179"
+      - "22:22"
+    expose:
+      - "179"
+      - "22"
+    networks:
+      - lab
+
   tester:
     build:
       context: tester-service
@@ -19,11 +32,42 @@ services:
       - ./timezone:/etc/localtime:ro
     expose:
       - "8000"
+      - "22"
     ports:
       - "8000:8000"
+      - "2222:22"
     env_file:
       - tester-service/.env
     entrypoint: >
       sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       - frr
+    networks:
+      - lab
+
+  controller:
+    build:
+      context: controller-service
+      dockerfile: docker/Dockerfile
+    container_name: controller
+    ports:
+      - "8001:8000"
+    # Live code: host src → /opt/src; uvicorn --reload watches that tree
+    command: >
+      uvicorn controller.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /opt/src
+    volumes:
+      - ./controller-service/src:/opt/src
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      DOCKER_SOCKET: unix:///var/run/docker.sock
+      CONTAINER_FRR: frr
+      CONTAINER_TESTER: tester
+      DUT_SSH_HOST: frr
+      DUT_SSH_PORT: "22"
+      DUT_SSH_USERNAME: root
+      DUT_SSH_PASSWORD: rootpassword
+    depends_on:
+      - frr
+      - tester
+    networks:
+      - lab
