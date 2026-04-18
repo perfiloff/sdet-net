@@ -9,12 +9,12 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
-    Request,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
 from fastapi.responses import PlainTextResponse
+from starlette.requests import HTTPConnection
 from starlette.responses import Response
 
 from controller.core.settings import Settings
@@ -44,8 +44,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_container(request: Request) -> AppContainer:
-    return request.app.state.container
+def get_container(conn: HTTPConnection) -> AppContainer:
+    """Works for HTTP routes (``Request``) and WebSockets (``WebSocket``)."""
+    return conn.app.state.container
 
 
 ContainerDep = Annotated[AppContainer, Depends(get_container)]
@@ -224,6 +225,10 @@ async def dut_vtysh_session_shell(
         except Exception as exc:  # noqa: BLE001
             logger.exception("vtysh shell pump_out: %s", exc)
 
+    def _stdin_line(s: str) -> str:
+        """Match ``_write_line``: PTY line discipline often buffers until newline."""
+        return s if s.endswith("\n") else s + "\n"
+
     out_task = asyncio.create_task(pump_out())
     try:
         while True:
@@ -235,10 +240,10 @@ async def dut_vtysh_session_shell(
             text = msg.get("text")
             raw = msg.get("bytes")
             if text is not None:
-                stdin.write(text)
+                stdin.write(_stdin_line(text))
                 await stdin.drain()
             elif raw is not None:
-                stdin.write(raw.decode("utf-8", errors="replace"))
+                stdin.write(_stdin_line(raw.decode("utf-8", errors="replace")))
                 await stdin.drain()
     except WebSocketDisconnect:
         logger.info("vtysh shell websocket disconnected session_id=%s", session_id)

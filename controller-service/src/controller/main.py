@@ -1,8 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from controller.api.v1.config_hosts import router as config_hosts_router
 from controller.api.v1.controller import router
@@ -44,6 +47,22 @@ app = FastAPI(
 
 app.include_router(router, prefix="/api/v1", tags=["controller"])
 app.include_router(config_hosts_router, prefix="/api/v1", tags=["config"])
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+# Bind mounts may omit `static/`; Starlette requires the directory to exist.
+_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/")
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/ui/", status_code=307)
+
+
+app.mount(
+    "/ui",
+    StaticFiles(directory=str(_STATIC_DIR), html=True),
+    name="ui",
+)
 
 
 if __name__ == "__main__":

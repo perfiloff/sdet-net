@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Controller</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Controller</h1>
+      <nav class="nav" aria-label="Sections">
+        <button type="button" class="nav-btn active" data-section="dashboard">Dashboard</button>
+        <button type="button" class="nav-btn" data-section="hosts">DUT hosts</button>
+        <button type="button" class="nav-btn" data-section="sessions">Sessions</button>
+        <button type="button" class="nav-btn" data-section="logs">Logs</button>
+        <button type="button" class="nav-btn" data-section="shell">Shell</button>
+      </nav>
+      <a class="openapi" href="/api/openapi" target="_blank" rel="noopener">OpenAPI</a>
+    </header>
+
+    <main>
+      <p id="global-err" class="err global-err" hidden></p>
+
+      <section id="panel-dashboard" class="panel active" aria-labelledby="dashboard-heading">
+        <h2 id="dashboard-heading">Dashboard</h2>
+        <div class="row">
+          <button type="button" id="btn-ping">Check ping</button>
+          <span id="ping-out" class="mono"></span>
+        </div>
+        <div class="row">
+          <button type="button" id="btn-health">Check DUT health</button>
+        </div>
+        <div id="health-box" class="health-box" hidden>
+          <p><strong>SSH reachable:</strong> <span id="health-ssh"></span></p>
+          <p><strong>vtysh OK:</strong> <span id="health-vtysh"></span></p>
+          <p class="mono" id="health-msg"></p>
+        </div>
+      </section>
+
+      <section id="panel-hosts" class="panel" aria-labelledby="hosts-heading">
+        <h2 id="hosts-heading">DUT hosts</h2>
+        <p class="muted" id="hosts-config-path"></p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Host</th>
+                <th>Port</th>
+                <th>User</th>
+                <th>Password</th>
+                <th>Private key</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="hosts-tbody"></tbody>
+          </table>
+        </div>
+
+        <h3>Add host</h3>
+        <form id="form-host-create" class="form-grid">
+          <label>Host <input name="host" required /></label>
+          <label>Port <input name="port" type="number" value="22" min="1" max="65535" /></label>
+          <label>Username <input name="username" required /></label>
+          <label class="span-2">Password (optional) <input name="password" type="password" autocomplete="new-password" /></label>
+          <label class="span-2">Private key PEM (optional) <textarea name="private_key" rows="3"></textarea></label>
+          <button type="submit">Create</button>
+        </form>
+
+        <h3 id="edit-heading">Edit host</h3>
+        <p class="muted" id="edit-hint">Select “Edit” on a row to load this form.</p>
+        <form id="form-host-edit" class="form-grid" hidden>
+          <input type="hidden" name="index" />
+          <label>Host <input name="host" required /></label>
+          <label>Port <input name="port" type="number" min="1" max="65535" /></label>
+          <label>Username <input name="username" required /></label>
+          <label class="span-2">New password (leave empty to keep) <input name="password" type="password" autocomplete="new-password" /></label>
+          <label class="span-2">New private key (leave empty to keep) <textarea name="private_key" rows="3"></textarea></label>
+          <label><input type="checkbox" name="clear_password" /> Clear stored password</label>
+          <label><input type="checkbox" name="clear_private_key" /> Clear stored private key</label>
+          <div class="row span-2">
+            <button type="submit">Save</button>
+            <button type="button" id="btn-host-edit-cancel">Cancel</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="panel-sessions" class="panel" aria-labelledby="sessions-heading">
+        <h2 id="sessions-heading">vtysh sessions</h2>
+        <div class="row">
+          <button type="button" id="btn-sessions-refresh">Refresh list</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>Endpoint</th>
+                <th>Bootstrap</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="sessions-tbody"></tbody>
+          </table>
+        </div>
+
+        <h3>Open session</h3>
+        <p class="muted">Leave SSH override empty to use controller defaults.</p>
+        <form id="form-session-create" class="form-grid">
+          <label>Host <input name="host" placeholder="optional" /></label>
+          <label>Port <input name="port" type="number" placeholder="22" min="1" max="65535" /></label>
+          <label>Username <input name="username" placeholder="optional" /></label>
+          <label class="span-2">Password <input name="password" type="password" autocomplete="new-password" /></label>
+          <label class="span-2">Private key <textarea name="private_key" rows="2" placeholder="optional"></textarea></label>
+          <button type="submit">Create session</button>
+        </form>
+
+        <h3>Show / configure</h3>
+        <form id="form-session-exec" class="form-grid">
+          <label>Session ID <input name="session_id" required class="mono" /></label>
+          <label class="span-2">Show command <input name="show_command" placeholder="e.g. show version" /></label>
+          <button type="button" id="btn-show">Run show</button>
+          <label class="span-2">Configure lines (one per line) <textarea name="configure_lines" rows="4" placeholder="router ospf&#10; ..."></textarea></label>
+          <button type="button" id="btn-configure">Run configure</button>
+        </form>
+        <pre id="session-exec-out" class="out mono" aria-live="polite"></pre>
+      </section>
+
+      <section id="panel-logs" class="panel" aria-labelledby="logs-heading">
+        <h2 id="logs-heading">Logs</h2>
+        <div class="row gap">
+          <label>
+            Source
+            <select id="logs-source">
+              <option value="all">all</option>
+              <option value="frr">frr</option>
+              <option value="tester">tester</option>
+            </select>
+          </label>
+          <label>
+            Tail lines
+            <input id="logs-tail" type="number" value="500" min="1" max="50000" />
+          </label>
+          <button type="button" id="logs-refresh">Refresh snapshot</button>
+          <button type="button" id="logs-live-toggle">Start live stream</button>
+        </div>
+        <p class="muted" id="logs-live-status"></p>
+        <pre id="logs-out" class="out log-out mono" aria-live="polite"></pre>
+      </section>
+
+      <section id="panel-shell" class="panel" aria-labelledby="shell-heading">
+        <h2 id="shell-heading">vtysh shell (WebSocket)</h2>
+        <p class="warn">
+          Interactive PTY: close this WebSocket before using REST show/configure on the same session, or you may get
+          conflicts.
+        </p>
+        <div class="row gap">
+          <label>Session ID <input id="shell-session-id" class="mono" /></label>
+          <button type="button" id="shell-connect">Connect</button>
+          <button type="button" id="shell-disconnect" disabled>Disconnect</button>
+        </div>
+        <pre id="shell-out" class="out shell-out mono" aria-live="polite"></pre>
+        <label class="shell-input-label">
+          Send to stdin
+          <textarea id="shell-in" rows="3" class="mono" disabled placeholder="Type a command; Enter or Send sends one line (newline added automatically)"></textarea>
+        </label>
+        <button type="button" id="shell-send" disabled>Send</button>
+      </section>
+    </main>
+
+    <script src="/ui/app.js" type="module"></script>
+  </body>
+</html>
