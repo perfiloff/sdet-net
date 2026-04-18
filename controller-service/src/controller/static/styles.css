@@ -274,6 +274,12 @@ table.data tr:last-child td {
   max-height: 360px;
 }
 
+/* ansi_up inline colors inside <pre> */
+.shell-out :where(span) {
+  font-family: inherit;
+  font-size: inherit;
+}
+
 .shell-input-label {
   margin-top: 0.75rem;
 }

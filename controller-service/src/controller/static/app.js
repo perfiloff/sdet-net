@@ -1,3 +1,5 @@
+import { AnsiUp } from "./vendor/ansi_up.js";
+
 const API = "/api/v1";
 
 function apiUrl(path) {
@@ -449,10 +451,11 @@ function initShell() {
       return;
     }
     if (shellWs) shellWs.close();
+    const shellAnsi = new AnsiUp();
     const u = wsUrl(`/dut/vtysh/sessions/${encodeURIComponent(sid)}/shell`);
     const ws = new WebSocket(u);
     shellWs = ws;
-    out.textContent = "";
+    out.innerHTML = "";
     setShellConnected(false);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
@@ -465,7 +468,7 @@ function initShell() {
         const dec = new TextDecoder("utf-8", { fatal: false });
         chunk = dec.decode(ev.data);
       }
-      out.textContent += chunk;
+      out.innerHTML += shellAnsi.ansi_to_html(chunk);
       out.scrollTop = out.scrollHeight;
     };
     ws.onerror = () => showGlobalErr("Shell WebSocket error.");
