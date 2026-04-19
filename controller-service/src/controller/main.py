@@ -22,6 +22,7 @@ async def app_lifespan(app: FastAPI):
             container.settings,
             ssh=target,
             bootstrap=True,
+            kind="control",
         )
         container.bootstrap_session_ids.add(sid)
         container.logger.info(

@@ -236,28 +236,42 @@ function renderSessionsTable(sessions) {
   tbody.replaceChildren();
   for (const s of sessions) {
     const tr = document.createElement("tr");
+    const kind = s.kind || "control";
     const idTd = document.createElement("td");
     idTd.className = "mono";
     idTd.textContent = s.session_id;
+    const kindTd = document.createElement("td");
+    kindTd.textContent = kind;
     const epTd = document.createElement("td");
     epTd.textContent = s.endpoint;
     const bootTd = document.createElement("td");
     bootTd.textContent = s.bootstrap ? "yes" : "no";
     const actTd = document.createElement("td");
     actTd.className = "table-actions";
-    const useBtn = document.createElement("button");
-    useBtn.type = "button";
-    useBtn.textContent = "Use";
-    useBtn.addEventListener("click", () => {
-      document.querySelector('#form-session-exec [name="session_id"]').value = s.session_id;
-      document.getElementById("shell-session-id").value = s.session_id;
-    });
+    if (kind === "monitor") {
+      const streamBtn = document.createElement("button");
+      streamBtn.type = "button";
+      streamBtn.textContent = "Stream";
+      streamBtn.addEventListener("click", () => {
+        document.getElementById("monitor-stream-session-id").value = s.session_id;
+      });
+      actTd.appendChild(streamBtn);
+    } else {
+      const useBtn = document.createElement("button");
+      useBtn.type = "button";
+      useBtn.textContent = "Use";
+      useBtn.addEventListener("click", () => {
+        document.querySelector('#form-session-exec [name="session_id"]').value = s.session_id;
+        document.getElementById("shell-session-id").value = s.session_id;
+      });
+      actTd.appendChild(useBtn);
+    }
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.textContent = "Close";
     delBtn.addEventListener("click", () => deleteSession(s.session_id));
-    actTd.append(useBtn, delBtn);
-    tr.append(idTd, epTd, bootTd, actTd);
+    actTd.appendChild(delBtn);
+    tr.append(idTd, kindTd, epTd, bootTd, actTd);
     tbody.appendChild(tr);
   }
 }
@@ -279,15 +293,14 @@ async function deleteSession(sessionId) {
   }
 }
 
-function buildSessionCreateBody(form) {
+function buildOptionalSsh(form) {
   const host = form.host.value.trim();
   const username = form.username.value.trim();
   const portStr = form.port.value.trim();
   const password = form.password.value;
   const private_key = form.private_key.value.trim();
-  const any =
-    host || username || portStr || password || private_key;
-  if (!any) return {};
+  const any = host || username || portStr || password || private_key;
+  if (!any) return null;
   if (!host || !username) {
     throw new Error("SSH override requires host and username.");
   }
@@ -298,13 +311,102 @@ function buildSessionCreateBody(form) {
   const ssh = { host, port, username };
   if (password) ssh.password = password;
   if (private_key) ssh.private_key = private_key;
-  return { ssh };
+  return ssh;
+}
+
+function buildSessionCreateBody(form) {
+  const kind = form.kind.value;
+  const body = { kind };
+  const ssh = buildOptionalSsh(form);
+  if (ssh) body.ssh = ssh;
+  if (kind === "monitor") {
+    const mode = form.monitor_mode.value;
+    body.monitor = { mode };
+    if (mode === "tail") {
+      const p = form.monitor_tail_path.value.trim();
+      if (!p) throw new Error("Tail file path is required for tail mode.");
+      body.monitor.tail_path = p;
+    }
+  }
+  return body;
+}
+
+function syncSessionCreateMonitorFields() {
+  const kindEl = document.getElementById("session-create-kind");
+  const block = document.getElementById("session-create-monitor-fields");
+  const tailIn = document.getElementById("session-monitor-tail");
+  const modeEl = document.getElementById("session-monitor-mode");
+  if (!kindEl || !block || !tailIn || !modeEl) return;
+  const kind = kindEl.value;
+  const mode = modeEl.value;
+  block.hidden = kind !== "monitor";
+  tailIn.disabled = kind !== "monitor" || mode !== "tail";
+}
+
+let monitorStreamWs = null;
+
+function initMonitorStream() {
+  const out = document.getElementById("monitor-stream-out");
+  const connectBtn = document.getElementById("monitor-stream-connect");
+  const discBtn = document.getElementById("monitor-stream-disconnect");
+
+  connectBtn.addEventListener("click", () => {
+    showGlobalErr("");
+    const sid = document.getElementById("monitor-stream-session-id").value.trim();
+    if (!sid) {
+      showGlobalErr("Session ID is required.");
+      return;
+    }
+    if (monitorStreamWs) monitorStreamWs.close();
+    const ansi = new AnsiUp();
+    out.innerHTML = "";
+    connectBtn.disabled = true;
+    discBtn.disabled = true;
+    const u = wsUrl(`/dut/monitor/sessions/${encodeURIComponent(sid)}/stream`);
+    const ws = new WebSocket(u);
+    monitorStreamWs = ws;
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      if (monitorStreamWs === ws) discBtn.disabled = false;
+    };
+    ws.onmessage = (ev) => {
+      let chunk;
+      if (typeof ev.data === "string") chunk = ev.data;
+      else {
+        const dec = new TextDecoder("utf-8", { fatal: false });
+        chunk = dec.decode(ev.data);
+      }
+      out.innerHTML += ansi.ansi_to_html(chunk);
+      out.scrollTop = out.scrollHeight;
+    };
+    ws.onerror = () => showGlobalErr("Monitor stream WebSocket error.");
+    ws.onclose = () => {
+      connectBtn.disabled = false;
+      discBtn.disabled = true;
+      if (monitorStreamWs === ws) monitorStreamWs = null;
+    };
+  });
+
+  discBtn.addEventListener("click", () => {
+    if (monitorStreamWs) {
+      monitorStreamWs.close();
+      monitorStreamWs = null;
+    }
+    connectBtn.disabled = false;
+    discBtn.disabled = true;
+  });
 }
 
 function initSessions() {
   document.getElementById("btn-sessions-refresh").addEventListener("click", () => {
     refreshSessions().catch((e) => showGlobalErr(e.message));
   });
+
+  const kindEl = document.getElementById("session-create-kind");
+  const modeEl = document.getElementById("session-monitor-mode");
+  if (kindEl) kindEl.addEventListener("change", syncSessionCreateMonitorFields);
+  if (modeEl) modeEl.addEventListener("change", syncSessionCreateMonitorFields);
+  syncSessionCreateMonitorFields();
 
   document.getElementById("form-session-create").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -316,6 +418,8 @@ function initSessions() {
         body: JSON.stringify(body),
       });
       ev.target.reset();
+      if (kindEl) kindEl.value = "control";
+      syncSessionCreateMonitorFields();
       document.getElementById("session-exec-out").textContent = `Created session: ${created.session_id}`;
       await refreshSessions();
     } catch (e) {
@@ -520,4 +624,5 @@ initHosts();
 initSessions();
 initLogs();
 initShell();
+initMonitorStream();
 onTabDataLoad();

@@ -96,6 +96,7 @@
             <thead>
               <tr>
                 <th>Session ID</th>
+                <th>Kind</th>
                 <th>Endpoint</th>
                 <th>Bootstrap</th>
                 <th></th>
@@ -106,8 +107,32 @@
         </div>
 
         <h3>Open session</h3>
-        <p class="muted">Leave SSH override empty to use controller defaults.</p>
+        <p class="muted">
+          <strong>control</strong> — interactive vtysh (show / configure / shell). <strong>monitor</strong> — dedicated SSH
+          stream (<code>terminal monitor</code> or <code>tail -f</code>). Leave SSH override empty to use controller
+          defaults.
+        </p>
         <form id="form-session-create" class="form-grid">
+          <label>
+            Kind
+            <select name="kind" id="session-create-kind">
+              <option value="control">control</option>
+              <option value="monitor">monitor</option>
+            </select>
+          </label>
+          <div id="session-create-monitor-fields" class="span-2 form-grid" hidden>
+            <label>
+              Monitor mode
+              <select name="monitor_mode" id="session-monitor-mode">
+                <option value="terminal_monitor">terminal monitor (vtysh)</option>
+                <option value="tail">tail -f (file)</option>
+              </select>
+            </label>
+            <label class="span-2">
+              Tail file path (device)
+              <input name="monitor_tail_path" id="session-monitor-tail" type="text" placeholder="/var/log/..." disabled />
+            </label>
+          </div>
           <label>Host <input name="host" placeholder="optional" /></label>
           <label>Port <input name="port" type="number" placeholder="22" min="1" max="65535" /></label>
           <label>Username <input name="username" placeholder="optional" /></label>
@@ -115,6 +140,18 @@
           <label class="span-2">Private key <textarea name="private_key" rows="2" placeholder="optional"></textarea></label>
           <button type="submit">Create session</button>
         </form>
+
+        <h3>Monitor log stream (WebSocket)</h3>
+        <p class="muted">Uses session <strong>kind monitor</strong> only. One browser stream at a time per session.</p>
+        <div class="row gap">
+          <label class="span-2">
+            Session ID
+            <input id="monitor-stream-session-id" class="mono" placeholder="monitor session id" />
+          </label>
+          <button type="button" id="monitor-stream-connect">Connect</button>
+          <button type="button" id="monitor-stream-disconnect" disabled>Disconnect</button>
+        </div>
+        <pre id="monitor-stream-out" class="out shell-out mono" aria-live="polite"></pre>
 
         <h3>Show / configure</h3>
         <form id="form-session-exec" class="form-grid">
@@ -128,7 +165,8 @@
       </section>
 
       <section id="panel-logs" class="panel" aria-labelledby="logs-heading">
-        <h2 id="logs-heading">Logs</h2>
+        <h2 id="logs-heading">Logs (Docker)</h2>
+        <p class="muted">Lab containers via Docker socket. For a physical device, create a <strong>monitor</strong> session and use the stream above.</p>
         <div class="row gap">
           <label>
             Source

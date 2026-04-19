@@ -36,6 +36,7 @@ from controller.services.log_stream import (
     stream_merged_logs,
 )
 from controller.services.ssh.frr import FrrVtyshSession
+from controller.services.ssh.prompt_filter import VtyshMonitorLineFilter
 from controller.services.ssh.session_store import VtyshSessionStore
 from controller.services.vtysh_ssh import check_dut_health
 
@@ -64,9 +65,9 @@ def _get_vtysh_session(
     session_id: str,
     store: VtyshSessionStore = Depends(get_session_store),
 ) -> FrrVtyshSession:
-    sess = store.get(session_id)
+    sess = store.get_control(session_id)
     if sess is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "vtysh session not found")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "control vtysh session not found")
     return sess
 
 
@@ -107,6 +108,60 @@ async def logs_websocket(
             pass
 
 
+@router.websocket("/dut/monitor/sessions/{session_id}/stream")
+async def dut_monitor_session_stream(
+    websocket: WebSocket,
+    session_id: str,
+    store: VtyshSessionStore = Depends(get_session_store),
+) -> None:
+    """Stream device logs from a **monitor** session (SSH ``terminal monitor`` or ``tail -f``). One client at a time."""
+    mon = store.get_monitor(session_id)
+    if mon is None:
+        await websocket.close(code=1008, reason="monitor session not found")
+        return
+    if not mon.try_acquire_stream():
+        await websocket.close(code=1008, reason="monitor stream already active")
+        return
+    await websocket.accept()
+    stdout = mon.stdout
+    line_filter: VtyshMonitorLineFilter | None = (
+        VtyshMonitorLineFilter() if mon.mode == "terminal_monitor" else None
+    )
+    try:
+        while True:
+            chunk = await stdout.read(65536)
+            print(f"\nI am a line! {chunk}\nmon.mode: {mon.mode}\n")
+            if not chunk:
+                if line_filter:
+                    tail = line_filter.flush()
+                    if tail:
+                        await websocket.send_text(tail)
+                break
+            if isinstance(chunk, str):
+                text = chunk
+            else:
+                text = chunk.decode("utf-8", errors="replace")
+            if line_filter:
+                to_send = line_filter.feed(text)
+                if to_send:
+                    await websocket.send_text(to_send)
+            elif isinstance(chunk, str):
+                await websocket.send_text(chunk)
+            else:
+                await websocket.send_bytes(chunk)
+            await asyncio.sleep(0)
+    except WebSocketDisconnect:
+        logger.info("monitor stream websocket disconnected session_id=%s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("monitor stream error: %s", exc)
+        try:
+            await websocket.close(code=1011)
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        mon.release_stream()
+
+
 @router.get("/logs/{source}", response_class=PlainTextResponse)
 async def get_logs(
     source: Literal["frr", "tester", "all"],
@@ -125,7 +180,7 @@ async def get_logs(
 
 @router.get("/dut/vtysh/sessions", response_model=VtyshSessionListResponse)
 async def dut_vtysh_sessions_list(container: ContainerDep) -> VtyshSessionListResponse:
-    """List open vtysh sessions with ``host:port``; ``bootstrap`` marks sessions created from config at startup."""
+    """List open SSH sessions: ``kind`` is control (vtysh CLI) or monitor (device log stream)."""
     store = container.vtysh_session_store
     return VtyshSessionListResponse(
         sessions=[
@@ -134,6 +189,7 @@ async def dut_vtysh_sessions_list(container: ContainerDep) -> VtyshSessionListRe
                 host=rec.host,
                 port=rec.port,
                 endpoint=rec.endpoint,
+                kind=rec.kind,
                 bootstrap=rec.bootstrap,
             )
             for rec in store.list_records()
@@ -147,8 +203,13 @@ async def dut_vtysh_session_create(
     store: VtyshSessionStore = Depends(get_session_store),
     body: VtyshSessionCreateRequest = Body(default_factory=VtyshSessionCreateRequest),
 ) -> VtyshSessionCreated:
-    """Open SSH + interactive vtysh (PTY); use WebSocket shell or configure/show until DELETE."""
-    session_id = await store.create(s, body.ssh)
+    """Open SSH: control = interactive vtysh (shell/show/configure); monitor = dedicated log stream over SSH."""
+    session_id = await store.create(
+        s,
+        body.ssh,
+        kind=body.kind,
+        monitor=body.monitor,
+    )
     return VtyshSessionCreated(session_id=session_id)
 
 
@@ -157,7 +218,7 @@ async def dut_vtysh_session_delete(
     session_id: str,
     store: VtyshSessionStore = Depends(get_session_store),
 ) -> None:
-    """Close vtysh and SSH for this session id (idempotent if already gone)."""
+    """Close SSH for this session (control or monitor; idempotent if already gone)."""
     await store.delete(session_id)
 
 
@@ -194,9 +255,9 @@ async def dut_vtysh_session_shell(
     store: VtyshSessionStore = Depends(get_session_store),
 ) -> None:
     """Bidirectional vtysh PTY (e.g. ``terminal monitor``). Close WebSocket before REST show/configure."""
-    session = store.get(session_id)
+    session = store.get_control(session_id)
     if session is None:
-        await websocket.close(code=1008, reason="vtysh session not found")
+        await websocket.close(code=1008, reason="control vtysh session not found")
         return
     await websocket.accept()
     session.attach_shell_websocket()
