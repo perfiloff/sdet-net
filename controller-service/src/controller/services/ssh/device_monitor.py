@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 
 import asyncssh
 from asyncssh import STDOUT
@@ -73,12 +74,18 @@ class DeviceMonitorSession:
             await self._drain_initial()
             await self._write_line("terminal monitor")
         else:
-            path = self._monitor.tail_path or ""
-            if not path.strip():
+            path = (self._monitor.tail_path or "").strip()
+            if not path:
                 raise ValueError("tail_path is required for tail mode")
+            # Use a single remote command string (quoted argv). Some AsyncSSH builds
+            # mis-encode list argv and raise TypeError in packet.String when concat'ing.
+            remote_cmd = "exec " + " ".join(
+                shlex.quote(p) for p in ("tail", "-n", "200", "-f", path)
+            )
             self._proc_cm = self._conn.create_process(
-                ["tail", "-n", "200", "-f", path],
+                remote_cmd,
                 stderr=STDOUT,
+                encoding="utf-8",
             )
             self._proc = await self._proc_cm.__aenter__()
 

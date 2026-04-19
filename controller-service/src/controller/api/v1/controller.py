@@ -130,7 +130,6 @@ async def dut_monitor_session_stream(
     try:
         while True:
             chunk = await stdout.read(65536)
-            print(f"\nI am a line! {chunk}\nmon.mode: {mon.mode}\n")
             if not chunk:
                 if line_filter:
                     tail = line_filter.flush()
