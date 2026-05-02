@@ -9,6 +9,10 @@ dut_ssh_username: root
 dut_ssh_password: null
 dut_ssh_known_hosts: null
 dut_command_timeout: 60.0
+# URLs must work in the operator's browser (published ports), not only Docker service DNS.
+tester_portals:
+  - name: Tester
+    url: http://localhost:8000
 dut_devices:
 - host: 172.20.0.2
   port: 22

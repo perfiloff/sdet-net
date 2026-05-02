@@ -616,6 +616,119 @@ function onTabDataLoad() {
   document.querySelector('[data-section="sessions"]').addEventListener("click", () => {
     refreshSessions().catch((e) => showGlobalErr(e.message));
   });
+  document.querySelector('[data-section="tester"]').addEventListener("click", () => {
+    loadTesterPortals().catch((e) => {
+      const msg = String(e?.message ?? e) || "Unknown error while loading testers.";
+      showTesterPortalsFeedback(msg);
+      showGlobalErr(msg);
+    });
+  });
+}
+
+function showTesterPortalsFeedback(msg) {
+  const el = document.getElementById("tester-portals-feedback");
+  if (!el) return;
+  if (!msg) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = msg;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function openTesterConfigureWindow(baseUrl, name) {
+  const origin = String(baseUrl).replace(/\/$/, "");
+  const uiUrl = `${origin}/ui/`;
+  const safeName = String(name || "tester").replace(/[^\w-]+/g, "_").slice(0, 64);
+  window.open(
+    uiUrl,
+    `sdet-tester-${safeName}`,
+    "noopener,noreferrer,width=1024,height=780,scrollbars=yes,resizable=yes",
+  );
+}
+
+async function loadTesterPortals() {
+  showGlobalErr("");
+  showTesterPortalsFeedback("");
+  const tbody = document.getElementById("tester-portals-tbody");
+  const empty = document.getElementById("tester-portals-empty");
+  if (!tbody || !empty) {
+    const msg = "Page markup is missing the testers table; hard-refresh (Ctrl+Shift+R) the controller /ui/ page.";
+    showTesterPortalsFeedback(msg);
+    showGlobalErr(msg);
+    return;
+  }
+  const btn = document.getElementById("tester-portals-refresh");
+  const prevLabel = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Loading…";
+  }
+  try {
+    const data = await apiFetch("/tester-portals");
+    if (!data || typeof data !== "object" || !Array.isArray(data.testers)) {
+      const snippet =
+        typeof data === "string"
+          ? data.slice(0, 200)
+          : JSON.stringify(data).slice(0, 200);
+      throw new Error(
+        `Bad response from /api/v1/tester-portals (expected JSON with a "testers" array). Got: ${snippet}`,
+      );
+    }
+    tbody.replaceChildren();
+    const testers = data.testers;
+    if (testers.length === 0) {
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    for (const t of testers) {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = t.name || "Tester";
+      const urlTd = document.createElement("td");
+      const code = document.createElement("code");
+      code.className = "mono";
+      code.textContent = t.url;
+      urlTd.appendChild(code);
+      const actTd = document.createElement("td");
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.textContent = "Configure…";
+      openBtn.addEventListener("click", () => openTesterConfigureWindow(t.url, t.name));
+      actTd.appendChild(openBtn);
+      tr.append(nameTd, urlTd, actTd);
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    let msg = String(e?.message ?? e);
+    if (!msg) msg = "Unknown error while loading testers.";
+    if (msg === "Not Found") {
+      msg =
+        "Testers list not found (404). This request must hit the controller API. Open the controller UI (e.g. http://localhost:8001/ui/ with default Compose ports), not the tester service UI on :8000.";
+    }
+    showTesterPortalsFeedback(msg);
+    showGlobalErr(msg);
+    tbody.replaceChildren();
+    empty.hidden = false;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prevLabel || "Refresh list";
+    }
+  }
+}
+
+function initTesterPortals() {
+  document.getElementById("tester-portals-refresh").addEventListener("click", () => {
+    loadTesterPortals().catch((e) => {
+      const msg = String(e?.message ?? e) || "Unknown error while loading testers.";
+      showTesterPortalsFeedback(msg);
+      showGlobalErr(msg);
+    });
+  });
 }
 
 initNav();
@@ -625,4 +738,5 @@ initSessions();
 initLogs();
 initShell();
 initMonitorStream();
+initTesterPortals();
 onTabDataLoad();

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from controller.models.ssh import SSHConfig
 
@@ -139,3 +139,23 @@ class VtyshSessionShowResponse(BaseModel):
 
 class VtyshSessionConfigureRequest(BaseModel):
     commands: list[str] = Field(..., min_length=1)
+
+
+class TesterPortalEntry(BaseModel):
+    """Browser-reachable tester origin; the portal opens ``{url}/ui/`` in a new window."""
+
+    name: str = Field(default="Tester", description="Label in the controller portal")
+    url: str = Field(
+        ...,
+        min_length=1,
+        description="e.g. http://localhost:8000 (path is not used; /ui/ is opened automatically)",
+    )
+
+    @field_validator("url", mode="after")
+    @classmethod
+    def strip_trailing_slash(cls, v: str) -> str:
+        return v.rstrip("/")
+
+
+class TesterPortalListResponse(BaseModel):
+    testers: list[TesterPortalEntry]

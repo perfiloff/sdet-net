@@ -671,9 +671,10 @@ class BGPManager:
 
     async def update_config(self, new_config: BGPConfigUpdate, reconnect: bool):
         """Update BGP configuration"""
-        for key, value in new_config.model_dump().items():
-            if value is not None:
-                setattr(self.connection_status.config, key, value)
+        payload = {k: v for k, v in new_config.model_dump(exclude_unset=True).items() if v is not None}
+        # model_dump turns nested capabilities into dicts; model_copy validates/coerces them.
+        new_config = BGPConfig(**payload)
+        self.connection_status.config = new_config
         self._sync_as_path_asn_width()
         if reconnect:
             await self.reset_connection()

@@ -1,8 +1,9 @@
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 from copy import deepcopy
+
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from tester_service.core.settings import bgp_settings
 from tester_service.models.bgp_capabilities import BGPCapabilityModel
@@ -22,7 +23,7 @@ class BGPFSMState(str, Enum):
 class BGPConfig(BaseModel):
     """BGP connection configuration"""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, validate_assignment=True)
 
     as_number: int = bgp_settings.as_number
     router_id: str = bgp_settings.router_id
@@ -31,6 +32,21 @@ class BGPConfig(BaseModel):
     remote_host: str = bgp_settings.remote_host
     remote_port: int = bgp_settings.remote_port
     capabilities: list[BGPCapabilityModel] = Field(default_factory=lambda: deepcopy(bgp_settings.capabilities))
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def _coerce_capabilities(cls, v: Any) -> Any:
+        if v is None or not isinstance(v, list):
+            return v
+        out: list[BGPCapabilityModel] = []
+        for item in v:
+            if isinstance(item, BGPCapabilityModel):
+                out.append(item)
+            elif isinstance(item, dict):
+                out.append(BGPCapabilityModel.model_validate(item))
+            else:
+                out.append(item)  # let pydantic raise if invalid
+        return out
 
 
 class BGPConnectionStatus(BaseModel):

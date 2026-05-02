@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tester (BGP)</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Tester (BGP)</h1>
+      <a class="openapi" href="/api/openapi" target="_blank" rel="noopener">OpenAPI</a>
+    </header>
+
+    <main>
+      <p id="global-err" class="err global-err" hidden></p>
+
+      <section aria-labelledby="tester-heading">
+        <h2 id="tester-heading">BGP lab</h2>
+        <p class="muted">This page talks to this service’s <code>/api/v1</code> (same origin).</p>
+
+        <h3>Status</h3>
+        <div class="row">
+          <button type="button" id="tester-btn-refresh-status">Refresh status</button>
+          <button type="button" id="tester-btn-ping">Ping</button>
+          <span id="tester-ping-out" class="mono"></span>
+        </div>
+        <pre id="tester-status-out" class="out" aria-live="polite"></pre>
+
+        <h3>Current BGP config</h3>
+        <div class="row">
+          <button type="button" id="tester-btn-refresh-config">Refresh config</button>
+        </div>
+        <pre id="tester-config-out" class="out" aria-live="polite"></pre>
+
+        <h3>Load from YAML (server path)</h3>
+        <p class="muted">
+          <code>POST /api/v1/bgp/config/load-from-yaml</code>. Path is on this host (e.g.
+          <code>/opt/config/bgp_config.yaml</code>).
+        </p>
+        <div class="form-grid">
+          <label class="span-2">
+            Server path (optional)
+            <input id="tester-yaml-path" type="text" placeholder="Default: BGP_CONFIG_FILE / search paths" />
+          </label>
+          <label><input type="checkbox" id="tester-yaml-reconnect" /> Reconnect BGP after apply</label>
+          <button type="button" id="tester-btn-load-yaml">Load YAML</button>
+        </div>
+
+        <h3>Apply settings (PATCH)</h3>
+        <p class="muted">Scalar fields only; capabilities unchanged unless you load YAML.</p>
+        <form id="tester-form-patch" class="form-grid">
+          <label>AS number <input name="as_number" type="number" required /></label>
+          <label>Router ID <input name="router_id" required /></label>
+          <label>Hold time <input name="hold_time" type="number" required /></label>
+          <label>BGP version <input name="bgp_version" type="number" required /></label>
+          <label>Remote host <input name="remote_host" required /></label>
+          <label>Remote port <input name="remote_port" type="number" required /></label>
+          <label class="span-2"><input type="checkbox" name="reconnect" id="tester-patch-reconnect" /> Reconnect BGP after apply</label>
+          <button type="submit">PATCH BGP config</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/ui/app.js" type="module"></script>
+  </body>
+</html>

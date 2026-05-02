@@ -92,6 +92,7 @@ def _find_config_file() -> Optional[str]:
         "../config/bgp_config.yaml",
         "../../config/bgp_config.yaml",
         Path(__file__).parent.parent.parent / "config" / "bgp_config.yaml",
+        "/opt/config/bgp_config.yaml",
     ]
 
     for path in candidate_paths:

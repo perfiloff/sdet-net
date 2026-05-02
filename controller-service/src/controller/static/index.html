@@ -15,6 +15,7 @@
         <button type="button" class="nav-btn" data-section="sessions">Sessions</button>
         <button type="button" class="nav-btn" data-section="logs">Logs</button>
         <button type="button" class="nav-btn" data-section="shell">Shell</button>
+        <button type="button" class="nav-btn" data-section="tester">Testers (BGP)</button>
       </nav>
       <a class="openapi" href="/api/openapi" target="_blank" rel="noopener">OpenAPI</a>
     </header>
@@ -204,6 +205,36 @@
           <textarea id="shell-in" rows="3" class="mono" disabled placeholder="Type a command; Enter or Send sends one line (newline added automatically)"></textarea>
         </label>
         <button type="button" id="shell-send" disabled>Send</button>
+      </section>
+
+      <section id="panel-tester" class="panel" aria-labelledby="tester-heading">
+        <h2 id="tester-heading">Testers (BGP)</h2>
+        <p class="muted">
+          Each row opens that tester’s own web UI in a new window (same origin to its API). Set
+          <code>tester_portals</code> in the controller <code>config.yaml</code>; use URLs your browser can reach
+          (e.g. <code>http://localhost:8000</code> when the tester port is published).
+          <strong>This tab only works on the controller UI</strong> (Compose example:
+          <code class="mono">http://localhost:8001/ui/</code>), not on the tester’s own <code>/ui/</code> page.
+        </p>
+        <p id="tester-portals-feedback" class="err" hidden role="alert"></p>
+        <div class="row">
+          <button type="button" id="tester-portals-refresh">Refresh list</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>URL</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tester-portals-tbody"></tbody>
+          </table>
+        </div>
+        <p class="muted" id="tester-portals-empty" hidden>
+          No testers configured. Add a <code>tester_portals</code> list to the controller config.
+        </p>
       </section>
     </main>
 

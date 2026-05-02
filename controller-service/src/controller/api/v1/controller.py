@@ -21,6 +21,7 @@ from controller.core.settings import Settings
 from controller.core.state import AppContainer
 from controller.models.schemas import (
     DutHealthResponse,
+    TesterPortalListResponse,
     VtyshSessionConfigureRequest,
     VtyshSessionCreated,
     VtyshSessionCreateRequest,
@@ -77,6 +78,11 @@ VtyshSessionDep = Annotated[FrrVtyshSession, Depends(_get_vtysh_session)]
 @router.get("/ping")
 async def ping() -> Response:
     return Response(content="pong", status_code=200)
+
+
+@router.get("/tester-portals", response_model=TesterPortalListResponse)
+async def list_tester_portals(container: ContainerDep) -> TesterPortalListResponse:
+    return TesterPortalListResponse(testers=list(container.settings.tester_portals))
 
 
 @router.websocket("/stream/logs")

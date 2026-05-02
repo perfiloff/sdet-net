@@ -9,6 +9,7 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import YamlConfigSettingsSource
 
+from controller.models.schemas import TesterPortalEntry
 from controller.models.ssh import SSHConfig
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -49,6 +50,11 @@ class Settings(BaseSettings):
     dut_ssh_password: str | None = Field(default=None, alias="DUT_SSH_PASSWORD")
     dut_ssh_known_hosts: str | None = Field(default=None, alias="DUT_SSH_KNOWN_HOSTS")
     dut_command_timeout: float = Field(default=60.0, alias="DUT_COMMAND_TIMEOUT")
+
+    #: Tester web UIs opened from the controller portal; each ``url`` must be reachable from the browser.
+    tester_portals: list[TesterPortalEntry] = Field(
+        default_factory=lambda: [TesterPortalEntry(name="Tester", url="http://localhost:8000")],
+    )
 
     #: When non-empty, each entry is a DUT (bootstrap sessions created for all). When empty, legacy single-DUT fields apply.
     dut_devices: list[SSHConfig] = Field(default_factory=list)

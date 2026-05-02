@@ -29,6 +29,7 @@ services:
     container_name: tester
     volumes:
       - ./tester-service/src:/opt/src
+      - ./tester-service/config:/opt/config:ro
       - ./timezone:/etc/localtime:ro
     expose:
       - "8000"

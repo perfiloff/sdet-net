@@ -1,11 +1,13 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
-# from tester_service.api.v1.tester import router as tester_router
 from tester_service.api.v1.tester import router
 from tester_service.core.settings import settings
 from tester_service.services.bgp import get_bgp_manager
@@ -44,6 +46,21 @@ app = FastAPI(
 
 
 app.include_router(router, prefix="/api/v1", tags=["ping"])
+
+_STATIC_DIR = Path(__file__).resolve().parent / "tester_service" / "static"
+_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/")
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/ui/", status_code=307)
+
+
+app.mount(
+    "/ui",
+    StaticFiles(directory=str(_STATIC_DIR), html=True),
+    name="ui",
+)
 
 
 if __name__ == "__main__":
