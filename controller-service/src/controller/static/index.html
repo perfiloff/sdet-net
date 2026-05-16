@@ -110,8 +110,7 @@
         <h3>Open session</h3>
         <p class="muted">
           <strong>control</strong> — interactive vtysh (show / configure / shell). <strong>monitor</strong> — dedicated SSH
-          stream (<code>terminal monitor</code> or <code>tail -f</code>). Leave SSH override empty to use controller
-          defaults.
+          stream (vtysh + monitor command, or <code>tail -f</code>). Leave SSH override empty to use controller defaults.
         </p>
         <form id="form-session-create" class="form-grid">
           <label>
@@ -125,7 +124,7 @@
             <label>
               Monitor mode
               <select name="monitor_mode" id="session-monitor-mode">
-                <option value="terminal_monitor">terminal monitor (vtysh)</option>
+                <option value="terminal_monitor">CLI / vtysh</option>
                 <option value="tail">tail -f (file)</option>
               </select>
             </label>
@@ -133,6 +132,27 @@
               Tail file path (device)
               <input name="monitor_tail_path" id="session-monitor-tail" type="text" placeholder="/var/log/..." disabled />
             </label>
+            <div id="session-monitor-vtysh-fields" class="span-2 form-grid">
+              <label class="span-2">
+                Monitor command
+                <input
+                  name="monitor_command"
+                  id="session-monitor-command"
+                  type="text"
+                  value="terminal monitor"
+                  placeholder="terminal monitor"
+                />
+              </label>
+              <label class="span-2">
+                Pre-configure commands (one per line, sent before monitor command)
+                <textarea
+                  name="monitor_pre_commands"
+                  id="session-monitor-pre-commands"
+                  rows="4"
+                  placeholder="configure terminal&#10;log syslog informational"
+                ></textarea>
+              </label>
+            </div>
           </div>
           <label>Host <input name="host" placeholder="optional" /></label>
           <label>Port <input name="port" type="number" placeholder="22" min="1" max="65535" /></label>
@@ -210,11 +230,10 @@
       <section id="panel-tester" class="panel" aria-labelledby="tester-heading">
         <h2 id="tester-heading">Testers (BGP)</h2>
         <p class="muted">
-          Each row opens that tester’s own web UI in a new window (same origin to its API). Set
-          <code>tester_portals</code> in the controller <code>config.yaml</code>; use URLs your browser can reach
-          (e.g. <code>http://localhost:8000</code> when the tester port is published).
-          <strong>This tab only works on the controller UI</strong> (Compose example:
-          <code class="mono">http://localhost:8001/ui/</code>), not on the tester’s own <code>/ui/</code> page.
+          Upload a local BGP YAML (same format as <code>tester-service/config/bgp_config.yaml</code>) to overwrite
+          the file on the tester and apply it. Set <code>tester_portals</code> in the controller
+          <code>config.yaml</code> with browser-reachable URLs (e.g. <code>http://localhost:8000</code>).
+          <strong>Use this page on the controller</strong> (Compose: <code class="mono">http://localhost:8001/ui/</code>).
         </p>
         <p id="tester-portals-feedback" class="err" hidden role="alert"></p>
         <div class="row">
@@ -226,6 +245,7 @@
               <tr>
                 <th>Name</th>
                 <th>URL</th>
+                <th>Upload YAML</th>
                 <th></th>
               </tr>
             </thead>
@@ -238,6 +258,6 @@
       </section>
     </main>
 
-    <script src="/ui/app.js" type="module"></script>
+    <script src="/ui/app.js?v=3" type="module"></script>
   </body>
 </html>

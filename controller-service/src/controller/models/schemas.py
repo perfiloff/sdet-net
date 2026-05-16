@@ -72,15 +72,43 @@ class MonitorConfig(BaseModel):
 
     mode: Literal["terminal_monitor", "tail"] = Field(
         default="terminal_monitor",
-        description="Run interactive vtysh and ``terminal monitor``, or ``tail -f`` on a file.",
+        description="Run interactive vtysh and a monitor CLI command, or ``tail -f`` on a file.",
     )
     tail_path: str | None = Field(
         default=None,
         description="File path on the device when mode is ``tail``.",
     )
+    pre_commands: list[str] = Field(
+        default_factory=list,
+        description="CLI lines sent on vtysh stdin before ``monitor_command`` (e.g. configure snippets).",
+    )
+    monitor_command: str = Field(
+        default="terminal monitor",
+        min_length=1,
+        description="Final CLI line that starts log streaming (FRR default: ``terminal monitor``).",
+    )
+
+    @field_validator("pre_commands", mode="before")
+    @classmethod
+    def _normalize_pre_commands(cls, v: object) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            lines = v.splitlines()
+        else:
+            lines = list(v)  # type: ignore[arg-type]
+        return [str(line).strip() for line in lines if str(line).strip()]
+
+    @field_validator("monitor_command", mode="after")
+    @classmethod
+    def _strip_monitor_command(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("monitor_command must not be empty")
+        return s
 
     @model_validator(mode="after")
-    def _tail_path_when_tail(self) -> MonitorConfig:
+    def _mode_fields(self) -> MonitorConfig:
         if self.mode == "tail":
             if not (self.tail_path and self.tail_path.strip()):
                 raise ValueError("tail_path is required when mode is tail")

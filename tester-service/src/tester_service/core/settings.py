@@ -7,6 +7,11 @@ from tester_service.models.bgp_capabilities import BGPCapabilityCode, BGPCapabil
 class Settings(BaseSettings):
     project_name: str = Field("movies", alias="PROJECT_NAME")
     debug: bool = Field(False, alias="DEBUG")
+    cors_origins: str = Field(
+        default="http://localhost:8001,http://127.0.0.1:8001",
+        alias="CORS_ORIGINS",
+        description="Comma-separated origins allowed to call the tester API from a browser (controller UI)",
+    )
 
 
 class BGPSettings(BaseSettings):

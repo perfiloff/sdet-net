@@ -33,19 +33,20 @@
         </div>
         <pre id="tester-config-out" class="out" aria-live="polite"></pre>
 
-        <h3>Load from YAML (server path)</h3>
+        <h3>Upload BGP YAML</h3>
         <p class="muted">
-          <code>POST /api/v1/bgp/config/load-from-yaml</code>. Path is on this host (e.g.
-          <code>/opt/config/bgp_config.yaml</code>).
+          Choose a file from your machine. It overwrites the config on this tester (e.g.
+          <code id="tester-yaml-target-path">…</code>) and applies the <code>bgp:</code> section.
         </p>
         <div class="form-grid">
           <label class="span-2">
-            Server path (optional)
-            <input id="tester-yaml-path" type="text" placeholder="Default: BGP_CONFIG_FILE / search paths" />
+            YAML file
+            <input id="tester-yaml-file" type="file" accept=".yaml,.yml,text/yaml" />
           </label>
-          <label><input type="checkbox" id="tester-yaml-reconnect" /> Reconnect BGP after apply</label>
-          <button type="button" id="tester-btn-load-yaml">Load YAML</button>
+          <label><input type="checkbox" id="tester-yaml-reconnect" checked /> Reconnect BGP after apply</label>
+          <button type="button" id="tester-btn-upload-yaml">Upload &amp; apply</button>
         </div>
+        <p id="tester-upload-status" class="muted" aria-live="polite"></p>
 
         <h3>Apply settings (PATCH)</h3>
         <p class="muted">Scalar fields only; capabilities unchanged unless you load YAML.</p>
@@ -62,6 +63,6 @@
       </section>
     </main>
 
-    <script src="/ui/app.js" type="module"></script>
+    <script src="/ui/app.js?v=2" type="module"></script>
   </body>
 </html>

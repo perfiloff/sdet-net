@@ -10,6 +10,42 @@ from tester_service.models.bgp_capabilities import BGPCapabilityCode, BGPCapabil
 if TYPE_CHECKING:
     from .settings import BGPSettings
 
+DEFAULT_BGP_CONFIG_PATH = Path("/opt/config/bgp_config.yaml")
+
+
+def resolve_bgp_config_path(config_path: Optional[str] = None) -> Path:
+    """Resolved path for the BGP YAML file (explicit, search, env, or default)."""
+    if config_path:
+        return Path(config_path).expanduser().resolve()
+    found = _find_config_file()
+    if found:
+        return Path(found)
+    env_path = os.getenv("BGP_CONFIG_FILE")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return DEFAULT_BGP_CONFIG_PATH
+
+
+def validate_bgp_yaml_text(text: str) -> None:
+    """Ensure uploaded YAML has a ``bgp`` section before writing to disk."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML: {exc}") from exc
+    if not data or "bgp" not in data:
+        raise ValueError("YAML configuration must contain a top-level 'bgp' section")
+
+
+def write_bgp_config_yaml(text: str, config_path: Optional[str] = None) -> Path:
+    """Overwrite the BGP config file on disk (atomic replace)."""
+    validate_bgp_yaml_text(text)
+    path = resolve_bgp_config_path(config_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+    return path
+
 
 def load_bgp_config_from_yaml(config_path: Optional[str] = None) -> "BGPSettings":
     """
@@ -31,16 +67,16 @@ def load_bgp_config_from_yaml(config_path: Optional[str] = None) -> "BGPSettings
     # Import here to avoid circular imports
     from .settings import BGPSettings
 
-    if config_path is None:
-        config_path = _find_config_file()
+    path = resolve_bgp_config_path(config_path)
+    config_path = str(path)
 
-    if not config_path or not os.path.exists(config_path):
+    if not path.is_file():
         raise FileNotFoundError(
             f"BGP configuration file not found: {config_path}. "
             "Provide config_path or place bgp_config.yaml in ./config/ or ../config/"
         )
 
-    with open(config_path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         config_data = yaml.safe_load(f)
 
     if not config_data or "bgp" not in config_data:

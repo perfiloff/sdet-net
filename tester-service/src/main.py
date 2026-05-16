@@ -5,6 +5,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -44,6 +45,15 @@ app = FastAPI(
     lifespan=app_lifespan,
 )
 
+
+_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.include_router(router, prefix="/api/v1", tags=["ping"])
 

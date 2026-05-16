@@ -72,7 +72,10 @@ class DeviceMonitorSession:
             )
             self._proc = await self._proc_cm.__aenter__()
             await self._drain_initial()
-            await self._write_line("terminal monitor")
+            for cmd in self._monitor.pre_commands:
+                await self._write_line(cmd)
+                await self._drain_initial()
+            await self._write_line(self._monitor.monitor_command)
         else:
             path = (self._monitor.tail_path or "").strip()
             if not path:

@@ -11,6 +11,10 @@ function formatJson(obj) {
 
 function showGlobalErr(msg) {
   const el = document.getElementById("global-err");
+  if (!el) {
+    if (msg) console.error(msg);
+    return;
+  }
   if (!msg) {
     el.hidden = true;
     el.textContent = "";
@@ -18,15 +22,28 @@ function showGlobalErr(msg) {
   }
   el.hidden = false;
   el.textContent = msg;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function setUploadStatus(msg) {
+  const el = document.getElementById("tester-upload-status");
+  if (el) el.textContent = msg || "";
 }
 
 async function apiFetch(path, options = {}) {
-  const headers = { ...options.headers };
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const headers = { ...(options.headers || {}) };
   const hasBody = options.body != null;
   if (hasBody && typeof options.body === "string" && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const r = await fetch(apiUrl(path), { ...options, headers });
+  const fetchOpts = { ...options };
+  if (isFormData) {
+    delete fetchOpts.headers;
+  } else if (Object.keys(headers).length) {
+    fetchOpts.headers = headers;
+  }
+  const r = await fetch(apiUrl(path), fetchOpts);
   if (!r.ok) {
     let detail = r.statusText;
     try {
@@ -61,52 +78,97 @@ function fillTesterPatchForm(cfg) {
 async function refreshTesterStatus() {
   showGlobalErr("");
   const data = await apiFetch("/status");
-  document.getElementById("tester-status-out").textContent = formatJson(data);
+  const out = document.getElementById("tester-status-out");
+  if (out) out.textContent = formatJson(data);
 }
 
 async function refreshTesterConfig() {
   showGlobalErr("");
   const data = await apiFetch("/bgp/config");
-  document.getElementById("tester-config-out").textContent = formatJson(data);
+  const out = document.getElementById("tester-config-out");
+  if (out) out.textContent = formatJson(data);
   fillTesterPatchForm(data);
 }
 
-function init() {
-  document.getElementById("tester-btn-refresh-status").addEventListener("click", () => {
-    refreshTesterStatus().catch((e) => showGlobalErr(e.message));
-  });
-  document.getElementById("tester-btn-refresh-config").addEventListener("click", () => {
-    refreshTesterConfig().catch((e) => showGlobalErr(e.message));
-  });
-  document.getElementById("tester-btn-ping").addEventListener("click", async () => {
-    showGlobalErr("");
-    const out = document.getElementById("tester-ping-out");
-    out.textContent = "…";
-    try {
-      out.textContent = await apiFetch("/ping");
-    } catch (e) {
-      showGlobalErr(e.message);
-      out.textContent = "";
+async function handleUploadYaml() {
+  showGlobalErr("");
+  setUploadStatus("");
+  const input = document.getElementById("tester-yaml-file");
+  const btn = document.getElementById("tester-btn-upload-yaml");
+  const file = input?.files?.[0];
+  if (!file) {
+    showGlobalErr("Choose a YAML file to upload.");
+    setUploadStatus("No file selected.");
+    return;
+  }
+  const reconnect = document.getElementById("tester-yaml-reconnect")?.checked ?? false;
+  const q = reconnect ? "?reconnect=true" : "";
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const prevLabel = btn?.textContent ?? "Upload & apply";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Uploading…";
+  }
+  setUploadStatus(`Uploading ${file.name}…`);
+  try {
+    const data = await apiFetch(`/bgp/config/upload-yaml${q}`, { method: "POST", body: form });
+    if (data?.path) {
+      const pathEl = document.getElementById("tester-yaml-target-path");
+      if (pathEl) pathEl.textContent = data.path;
+    }
+    const cfg = data?.config ?? data;
+    const out = document.getElementById("tester-config-out");
+    if (out) out.textContent = formatJson(cfg);
+    fillTesterPatchForm(cfg);
+    if (input) input.value = "";
+    setUploadStatus(data?.path ? `Saved to ${data.path} and applied.` : "Upload complete.");
+    await refreshTesterStatus().catch(() => {});
+  } catch (e) {
+    const msg = String(e?.message ?? e) || "Upload failed.";
+    showGlobalErr(msg);
+    setUploadStatus(msg);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+    }
+  }
+}
+
+function bindUi() {
+  const main = document.querySelector("main");
+  if (!main) {
+    console.error("tester ui: <main> not found");
+    return;
+  }
+
+  main.addEventListener("click", (ev) => {
+    const id = ev.target?.id;
+    if (id === "tester-btn-refresh-status") {
+      refreshTesterStatus().catch((e) => showGlobalErr(String(e?.message ?? e)));
+    } else if (id === "tester-btn-refresh-config") {
+      refreshTesterConfig().catch((e) => showGlobalErr(String(e?.message ?? e)));
+    } else if (id === "tester-btn-ping") {
+      (async () => {
+        showGlobalErr("");
+        const out = document.getElementById("tester-ping-out");
+        if (out) out.textContent = "…";
+        try {
+          if (out) out.textContent = await apiFetch("/ping");
+        } catch (e) {
+          showGlobalErr(String(e?.message ?? e));
+          if (out) out.textContent = "";
+        }
+      })();
+    } else if (id === "tester-btn-upload-yaml") {
+      ev.preventDefault();
+      handleUploadYaml();
     }
   });
-  document.getElementById("tester-btn-load-yaml").addEventListener("click", async () => {
-    showGlobalErr("");
-    const path = document.getElementById("tester-yaml-path").value.trim();
-    const reconnect = document.getElementById("tester-yaml-reconnect").checked;
-    const q = new URLSearchParams();
-    if (path) q.set("path", path);
-    if (reconnect) q.set("reconnect", "true");
-    const suffix = q.toString() ? `?${q.toString()}` : "";
-    try {
-      const cfg = await apiFetch(`/bgp/config/load-from-yaml${suffix}`, { method: "POST" });
-      document.getElementById("tester-config-out").textContent = formatJson(cfg);
-      fillTesterPatchForm(cfg);
-      await refreshTesterStatus().catch(() => {});
-    } catch (e) {
-      showGlobalErr(e.message);
-    }
-  });
-  document.getElementById("tester-form-patch").addEventListener("submit", async (ev) => {
+
+  const patchForm = document.getElementById("tester-form-patch");
+  patchForm?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     showGlobalErr("");
     const f = ev.target;
@@ -125,11 +187,27 @@ function init() {
       await refreshTesterConfig();
       await refreshTesterStatus().catch(() => {});
     } catch (e) {
-      showGlobalErr(e.message);
+      showGlobalErr(String(e?.message ?? e));
     }
   });
 }
 
-init();
-refreshTesterConfig().catch(() => {});
-refreshTesterStatus().catch(() => {});
+async function loadYamlTargetPath() {
+  try {
+    const data = await apiFetch("/bgp/config/yaml-path");
+    const pathEl = document.getElementById("tester-yaml-target-path");
+    if (pathEl && data?.path) pathEl.textContent = data.path;
+  } catch {
+    /* optional hint */
+  }
+}
+
+try {
+  bindUi();
+  loadYamlTargetPath().catch(() => {});
+  refreshTesterConfig().catch(() => {});
+  refreshTesterStatus().catch(() => {});
+} catch (e) {
+  console.error("tester ui init failed:", e);
+  showGlobalErr(`UI failed to start: ${e?.message ?? e}`);
+}

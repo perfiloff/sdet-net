@@ -5,6 +5,12 @@ from scapy.base_classes import Net
 from tester_service.models.bgp_capabilities import BGPCapabilityModel
 
 
+class BGPYamlUploadResponse(BaseModel):
+    path: str = Field(description="Absolute path of the written YAML file on the tester host")
+    applied: bool = Field(description="Whether settings were loaded into the running BGP manager")
+    config: dict | None = Field(default=None, description="Applied BGP config when applied=true")
+
+
 class BGPConfigUpdate(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

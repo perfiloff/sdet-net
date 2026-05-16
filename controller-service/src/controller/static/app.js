@@ -314,18 +314,35 @@ function buildOptionalSsh(form) {
   return ssh;
 }
 
+function readMonitorConfigFromDom() {
+  const mode = document.getElementById("session-monitor-mode")?.value || "terminal_monitor";
+  const tailPath = document.getElementById("session-monitor-tail")?.value?.trim() || "";
+  const monitorCommand =
+    document.getElementById("session-monitor-command")?.value?.trim() || "terminal monitor";
+  const preRaw = document.getElementById("session-monitor-pre-commands")?.value ?? "";
+  const preCommands = preRaw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return { mode, tailPath, monitorCommand, preCommands };
+}
+
 function buildSessionCreateBody(form) {
-  const kind = form.kind.value;
+  const kind = form.kind?.value ?? document.getElementById("session-create-kind")?.value;
   const body = { kind };
   const ssh = buildOptionalSsh(form);
   if (ssh) body.ssh = ssh;
   if (kind === "monitor") {
-    const mode = form.monitor_mode.value;
-    body.monitor = { mode };
-    if (mode === "tail") {
-      const p = form.monitor_tail_path.value.trim();
-      if (!p) throw new Error("Tail file path is required for tail mode.");
-      body.monitor.tail_path = p;
+    const mon = readMonitorConfigFromDom();
+    if (mon.mode === "tail") {
+      if (!mon.tailPath) throw new Error("Tail file path is required for tail mode.");
+      body.monitor = { mode: "tail", tail_path: mon.tailPath };
+    } else {
+      body.monitor = {
+        mode: "terminal_monitor",
+        monitor_command: mon.monitorCommand,
+        pre_commands: mon.preCommands,
+      };
     }
   }
   return body;
@@ -336,11 +353,15 @@ function syncSessionCreateMonitorFields() {
   const block = document.getElementById("session-create-monitor-fields");
   const tailIn = document.getElementById("session-monitor-tail");
   const modeEl = document.getElementById("session-monitor-mode");
+  const vtyshBlock = document.getElementById("session-monitor-vtysh-fields");
   if (!kindEl || !block || !tailIn || !modeEl) return;
   const kind = kindEl.value;
   const mode = modeEl.value;
-  block.hidden = kind !== "monitor";
-  tailIn.disabled = kind !== "monitor" || mode !== "tail";
+  const isMonitor = kind === "monitor";
+  block.hidden = !isMonitor;
+  const isTail = isMonitor && mode === "tail";
+  tailIn.disabled = !isTail;
+  if (vtyshBlock) vtyshBlock.hidden = !isMonitor || isTail;
 }
 
 let monitorStreamWs = null;
@@ -649,6 +670,36 @@ function openTesterConfigureWindow(baseUrl, name) {
   );
 }
 
+async function uploadBgpYamlToTester(baseUrl, file, reconnect) {
+  const origin = String(baseUrl).replace(/\/$/, "");
+  const q = new URLSearchParams();
+  if (reconnect) q.set("reconnect", "true");
+  const qs = q.toString() ? `?${q.toString()}` : "";
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const r = await fetch(`${origin}/api/v1/bgp/config/upload-yaml${qs}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const j = await r.json();
+      if (typeof j.detail === "string") detail = j.detail;
+      else if (Array.isArray(j.detail)) detail = j.detail.map((x) => x.msg || JSON.stringify(x)).join("; ");
+      else if (j.detail != null) detail = String(j.detail);
+      else detail = JSON.stringify(j);
+    } catch {
+      const t = await r.text();
+      if (t) detail = t;
+    }
+    throw new Error(detail);
+  }
+  const ct = r.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return r.json();
+  return r.text();
+}
+
 async function loadTesterPortals() {
   showGlobalErr("");
   showTesterPortalsFeedback("");
@@ -693,13 +744,55 @@ async function loadTesterPortals() {
       code.className = "mono";
       code.textContent = t.url;
       urlTd.appendChild(code);
+      const uploadTd = document.createElement("td");
+      const uploadWrap = document.createElement("div");
+      uploadWrap.className = "table-actions";
+      const fileIn = document.createElement("input");
+      fileIn.type = "file";
+      fileIn.accept = ".yaml,.yml,text/yaml";
+      const reconnectLbl = document.createElement("label");
+      reconnectLbl.className = "muted";
+      const reconnectChk = document.createElement("input");
+      reconnectChk.type = "checkbox";
+      reconnectChk.checked = true;
+      reconnectLbl.append(reconnectChk, document.createTextNode(" reconnect"));
+      const uploadBtn = document.createElement("button");
+      uploadBtn.type = "button";
+      uploadBtn.textContent = "Upload";
+      uploadBtn.addEventListener("click", async () => {
+        const file = fileIn.files?.[0];
+        if (!file) {
+          showTesterPortalsFeedback(`Choose a YAML file for ${t.name || "tester"}.`);
+          return;
+        }
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = "Uploading…";
+        showTesterPortalsFeedback("");
+        try {
+          const data = await uploadBgpYamlToTester(t.url, file, reconnectChk.checked);
+          showTesterPortalsFeedback(
+            `Uploaded to ${data.path || "tester"}${data.applied ? " and applied." : "."}`,
+          );
+          fileIn.value = "";
+        } catch (e) {
+          const msg = String(e?.message ?? e) || "Upload failed.";
+          showTesterPortalsFeedback(msg);
+          showGlobalErr(msg);
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = "Upload";
+        }
+      });
+      uploadWrap.append(fileIn, reconnectLbl, uploadBtn);
+      uploadTd.appendChild(uploadWrap);
+
       const actTd = document.createElement("td");
       const openBtn = document.createElement("button");
       openBtn.type = "button";
       openBtn.textContent = "Configure…";
       openBtn.addEventListener("click", () => openTesterConfigureWindow(t.url, t.name));
       actTd.appendChild(openBtn);
-      tr.append(nameTd, urlTd, actTd);
+      tr.append(nameTd, urlTd, uploadTd, actTd);
       tbody.appendChild(tr);
     }
   } catch (e) {
