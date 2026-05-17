@@ -7,7 +7,7 @@ from datetime import datetime
 from scapy.packet import Raw
 from tester_service.core.settings import bgp_settings
 from scapy.contrib.bgp import BGPOpen, BGPUpdate, BGPNotification, BGPHeader, BGPOptParam
-from tester_service.models.bgp_settings import BGPConfig
+
 
 class BGPMessage(BaseModel):
     """BGP message information"""
@@ -122,6 +122,8 @@ class BGPStats(BaseModel):
     keepalive_messages: int
     update_messages: int
     notification_messages: int
+    bytes_sent: int = 0
+    bytes_received: int = 0
     connection_uptime: Optional[str] = None
     
 
