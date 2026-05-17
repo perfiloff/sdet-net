@@ -13,6 +13,8 @@ dut_command_timeout: 60.0
 tester_portals:
   - name: Tester
     url: http://localhost:8000
+test_run_output_dir: /var/lib/controller/test-runs
+test_config_dir: /opt/test-configs
 dut_devices:
 - host: 172.20.0.2
   port: 22

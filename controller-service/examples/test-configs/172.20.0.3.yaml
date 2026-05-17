@@ -1,0 +1,4 @@
+type: configure
+commands:
+  - router bgp 65001
+  - neighbor 172.20.0.3 remote-as 65001

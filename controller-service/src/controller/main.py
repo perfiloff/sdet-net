@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from controller.api.v1.config_hosts import router as config_hosts_router
 from controller.api.v1.controller import router
+from controller.api.v1.test_runs import router as test_runs_router
 from controller.core.settings import settings
 from controller.core.state import AppContainer
 
@@ -48,6 +49,7 @@ app = FastAPI(
 
 app.include_router(router, prefix="/api/v1", tags=["controller"])
 app.include_router(config_hosts_router, prefix="/api/v1", tags=["config"])
+app.include_router(test_runs_router, prefix="/api/v1")
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 # Bind mounts may omit `static/`; Starlette requires the directory to exist.

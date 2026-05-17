@@ -34,6 +34,7 @@ class DeviceMonitorSession:
         self._proc: SSHClientProcess | None = None
         self._proc_cm: object | None = None
         self._streaming = False
+        self._runner_capture = False
 
     @property
     def mode(self) -> str:
@@ -126,7 +127,7 @@ class DeviceMonitorSession:
         return out
 
     def try_acquire_stream(self) -> bool:
-        if self._streaming:
+        if self._streaming or self._runner_capture:
             return False
         self._streaming = True
         return True
@@ -134,8 +135,36 @@ class DeviceMonitorSession:
     def release_stream(self) -> None:
         self._streaming = False
 
+    def try_acquire_runner(self) -> bool:
+        if self._streaming or self._runner_capture:
+            return False
+        self._runner_capture = True
+        return True
+
+    def release_runner(self) -> None:
+        self._runner_capture = False
+
+    @property
+    def runner_capture_active(self) -> bool:
+        return self._runner_capture
+
+    def is_alive(self) -> bool:
+        if self._conn is None or self._proc is None:
+            return False
+        if self._proc.returncode is not None:
+            return False
+        return True
+
+    async def send_lines(self, lines: list[str], *, idle: float = 0.35) -> None:
+        for line in lines:
+            await self._write_line(line)
+            await self._drain_initial()
+        if idle > 0:
+            await asyncio.sleep(idle)
+
     async def logout(self) -> None:
         self._streaming = False
+        self._runner_capture = False
         if self._proc_cm is not None:
             try:
                 await self._proc_cm.__aexit__(None, None, None)

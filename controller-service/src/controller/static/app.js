@@ -644,6 +644,9 @@ function onTabDataLoad() {
       showGlobalErr(msg);
     });
   });
+  document.querySelector('[data-section="testscripts"]')?.addEventListener("click", () => {
+    loadTestRuns().catch((e) => showGlobalErr(e.message));
+  });
 }
 
 function showTesterPortalsFeedback(msg) {
@@ -824,6 +827,172 @@ function initTesterPortals() {
   });
 }
 
+function showTestRunFeedback(msg, isErr = false) {
+  const el = document.getElementById("test-run-feedback");
+  if (!el) return;
+  if (!msg) {
+    el.hidden = true;
+    el.textContent = "";
+    el.classList.remove("err");
+    return;
+  }
+  el.hidden = false;
+  el.textContent = msg;
+  el.classList.toggle("err", isErr);
+}
+
+let testRunPollTimer = null;
+
+async function startTestRun(scriptFile, configFiles) {
+  const form = new FormData();
+  form.append("script", scriptFile, scriptFile.name);
+  for (const f of configFiles) {
+    form.append("configs", f, f.name);
+  }
+  const r = await fetch(apiUrl("/test-runs"), { method: "POST", body: form });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const j = await r.json();
+      if (typeof j.detail === "string") detail = j.detail;
+      else if (Array.isArray(j.detail)) detail = j.detail.map((x) => x.msg || JSON.stringify(x)).join("; ");
+      else if (j.detail != null) detail = String(j.detail);
+    } catch {
+      const t = await r.text();
+      if (t) detail = t;
+    }
+    throw new Error(detail);
+  }
+  return r.json();
+}
+
+async function loadTestRuns() {
+  const data = await apiFetch("/test-runs");
+  const tbody = document.getElementById("test-runs-tbody");
+  if (!tbody) return;
+  tbody.replaceChildren();
+  for (const run of data.runs || []) {
+    const tr = document.createElement("tr");
+    const stepAct = [run.current_step, run.current_action].filter(Boolean).join(" / ");
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(run.run_id)}</td>
+      <td>${escapeHtml(run.script_name)}</td>
+      <td>${escapeHtml(run.status)}</td>
+      <td class="muted">${escapeHtml(stepAct)}</td>
+      <td class="table-actions">
+        <button type="button" data-action="view" data-run-id="${escapeHtml(run.run_id)}">View</button>
+        <button type="button" data-action="cancel" data-run-id="${escapeHtml(run.run_id)}">Cancel</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll('button[data-action="view"]').forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-run-id");
+      document.getElementById("test-run-detail-id").value = id;
+      loadTestRunDetail(id).catch((e) => showGlobalErr(e.message));
+    });
+  });
+  tbody.querySelectorAll('button[data-action="cancel"]').forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-run-id");
+      try {
+        await apiFetch(`/test-runs/${id}`, { method: "DELETE" });
+        showTestRunFeedback(`Cancelled ${id}`);
+        await loadTestRuns();
+      } catch (e) {
+        showGlobalErr(e.message);
+      }
+    });
+  });
+}
+
+async function loadTestRunDetail(runId) {
+  if (!runId) return;
+  const data = await apiFetch(`/test-runs/${runId}`);
+  const pre = document.getElementById("test-run-results");
+  if (pre) pre.textContent = JSON.stringify(data, null, 2);
+  return data;
+}
+
+function initTestScripts() {
+  const form = document.getElementById("form-test-run");
+  if (!form) return;
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    showGlobalErr("");
+    showTestRunFeedback("");
+    const scriptIn = document.getElementById("test-run-script");
+    const configsIn = document.getElementById("test-run-configs");
+    const scriptFile = scriptIn?.files?.[0];
+    if (!scriptFile) {
+      showTestRunFeedback("Choose a script YAML file.", true);
+      return;
+    }
+    const configFiles = configsIn?.files ? [...configsIn.files] : [];
+    const btn = document.getElementById("test-run-submit");
+    const prev = btn?.textContent;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Starting…";
+    }
+    try {
+      const started = await startTestRun(scriptFile, configFiles);
+      document.getElementById("test-run-detail-id").value = started.run_id;
+      showTestRunFeedback(`Started run ${started.run_id} (${started.status})`);
+      await loadTestRuns();
+      await loadTestRunDetail(started.run_id);
+      if (testRunPollTimer) clearInterval(testRunPollTimer);
+      testRunPollTimer = setInterval(async () => {
+        try {
+          const detail = await loadTestRunDetail(started.run_id);
+          await loadTestRuns();
+          if (detail.status !== "running" && detail.status !== "pending") {
+            clearInterval(testRunPollTimer);
+            testRunPollTimer = null;
+            showTestRunFeedback(`Run ${started.run_id} finished: ${detail.status}`);
+          }
+        } catch {
+          /* ignore poll errors */
+        }
+      }, 2000);
+    } catch (e) {
+      showTestRunFeedback(e.message, true);
+      showGlobalErr(e.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prev || "Run script";
+      }
+    }
+  });
+
+  document.getElementById("test-runs-refresh")?.addEventListener("click", () => {
+    loadTestRuns().catch((e) => showGlobalErr(e.message));
+  });
+
+  document.getElementById("test-run-poll")?.addEventListener("click", () => {
+    const id = document.getElementById("test-run-detail-id")?.value?.trim();
+    if (!id) {
+      showTestRunFeedback("Enter a run ID.", true);
+      return;
+    }
+    loadTestRunDetail(id)
+      .then(() => loadTestRuns())
+      .catch((e) => showGlobalErr(e.message));
+  });
+
+  document.getElementById("test-run-download")?.addEventListener("click", () => {
+    const id = document.getElementById("test-run-detail-id")?.value?.trim();
+    if (!id) {
+      showTestRunFeedback("Enter a run ID.", true);
+      return;
+    }
+    window.open(apiUrl(`/test-runs/${encodeURIComponent(id)}/download`), "_blank", "noopener,noreferrer");
+  });
+}
+
 initNav();
 initDashboard();
 initHosts();
@@ -832,4 +1001,5 @@ initLogs();
 initShell();
 initMonitorStream();
 initTesterPortals();
+initTestScripts();
 onTabDataLoad();

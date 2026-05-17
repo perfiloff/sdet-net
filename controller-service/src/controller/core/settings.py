@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     #: When non-empty, each entry is a DUT (bootstrap sessions created for all). When empty, legacy single-DUT fields apply.
     dut_devices: list[SSHConfig] = Field(default_factory=list)
 
+    test_run_output_dir: str = Field(
+        default="/var/lib/controller/test-runs",
+        alias="TEST_RUN_OUTPUT_DIR",
+    )
+    test_config_dir: str = Field(
+        default="/opt/test-configs",
+        alias="TEST_CONFIG_DIR",
+    )
+
     @property
     def dut_ssh_targets(self) -> list[SSHConfig]:
         if self.dut_devices:

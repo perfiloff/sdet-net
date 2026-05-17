@@ -6,6 +6,7 @@ import logging
 
 from controller.core.settings import Settings
 from controller.services.ssh.session_store import VtyshSessionStore
+from controller.services.test_runner.run_registry import TestRunRegistry
 
 
 class AppContainer:
@@ -15,12 +16,17 @@ class AppContainer:
         self.settings = settings
         self.logger = logging.getLogger("controller")
         self._vtysh_session_store = VtyshSessionStore()
+        self._test_run_registry = TestRunRegistry()
         #: Session ids created at startup from ``settings.dut_ssh_targets`` (see ``GET /dut/vtysh/sessions``).
         self.bootstrap_session_ids: set[str] = set()
 
     @property
     def vtysh_session_store(self) -> VtyshSessionStore:
         return self._vtysh_session_store
+
+    @property
+    def test_run_registry(self) -> TestRunRegistry:
+        return self._test_run_registry
 
     def apply_settings(self, new_settings: Settings) -> None:
         """Replace in-memory settings after config file changes (active sessions unchanged)."""

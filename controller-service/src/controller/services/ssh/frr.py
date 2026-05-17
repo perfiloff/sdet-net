@@ -145,6 +145,13 @@ class FrrVtyshSession(RouterClient):
     async def _drain_banner(self) -> None:
         await self._read_until_idle(max_total=5.0, idle=0.2)
 
+    def is_alive(self) -> bool:
+        if self._conn is None or self._proc is None:
+            return False
+        if self._proc.returncode is not None:
+            return False
+        return True
+
     async def logout(self) -> None:
         self._ws_active = False
         if self._proc_cm is not None:

@@ -16,6 +16,7 @@
         <button type="button" class="nav-btn" data-section="logs">Logs</button>
         <button type="button" class="nav-btn" data-section="shell">Shell</button>
         <button type="button" class="nav-btn" data-section="tester">Testers (BGP)</button>
+        <button type="button" class="nav-btn" data-section="testscripts">Test scripts</button>
       </nav>
       <a class="openapi" href="/api/openapi" target="_blank" rel="noopener">OpenAPI</a>
     </header>
@@ -256,8 +257,54 @@
           No testers configured. Add a <code>tester_portals</code> list to the controller config.
         </p>
       </section>
+
+      <section id="panel-testscripts" class="panel" aria-labelledby="testscripts-heading">
+        <h2 id="testscripts-heading">Test scripts</h2>
+        <p class="muted">
+          Upload a test script YAML and optional configuration files (referenced by filename in steps).
+          Runs execute on the controller against DUT hosts from <code>dut_devices</code>.
+        </p>
+        <form id="form-test-run" class="form-grid">
+          <label class="span-2">
+            Script YAML
+            <input type="file" id="test-run-script" name="script" accept=".yaml,.yml,text/yaml" required />
+          </label>
+          <label class="span-2">
+            Configuration files (optional)
+            <input type="file" id="test-run-configs" name="configs" accept=".yaml,.yml,text/yaml" multiple />
+          </label>
+          <button type="submit" id="test-run-submit">Run script</button>
+          <button type="button" id="test-runs-refresh">Refresh runs</button>
+        </form>
+        <p id="test-run-feedback" class="muted" hidden></p>
+        <h3>Runs</h3>
+        <div class="table-wrap">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>Script</th>
+                <th>Status</th>
+                <th>Step / action</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="test-runs-tbody"></tbody>
+          </table>
+        </div>
+        <h3>Results</h3>
+        <div class="row gap">
+          <label class="span-2">
+            Run ID
+            <input id="test-run-detail-id" class="mono" placeholder="paste run id" />
+          </label>
+          <button type="button" id="test-run-poll">Refresh status</button>
+          <button type="button" id="test-run-download">Download results.json</button>
+        </div>
+        <pre id="test-run-results" class="out mono" aria-live="polite"></pre>
+      </section>
     </main>
 
-    <script src="/ui/app.js?v=3" type="module"></script>
+    <script src="/ui/app.js?v=4" type="module"></script>
   </body>
 </html>

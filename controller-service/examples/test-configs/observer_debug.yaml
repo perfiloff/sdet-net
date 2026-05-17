@@ -1,0 +1,5 @@
+type: send
+commands:
+  - debug bgp updates
+  - show bgp summary
+  - show bgp neighbours 172.20.0.3

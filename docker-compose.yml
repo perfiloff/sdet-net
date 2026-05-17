@@ -58,6 +58,8 @@ services:
       uvicorn controller.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /opt/src
     volumes:
       - ./controller-service/src:/opt/src
+      - ./controller-service/examples/test-configs:/opt/test-configs:ro
+      - controller-test-runs:/var/lib/controller/test-runs
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       DOCKER_SOCKET: unix:///var/run/docker.sock
@@ -72,3 +74,6 @@ services:
       - tester
     networks:
       - lab
+
+volumes:
+  controller-test-runs:

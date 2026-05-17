@@ -1,0 +1,30 @@
+name: bgp_monitor_test
+continue_on_error: false
+devices:
+  configurer:
+    ref: frr
+    session: control
+  observer:
+    ref: frr
+    session: monitor
+    monitor:
+      mode: terminal_monitor
+      monitor_command: terminal monitor
+      pre_commands:
+        - debug bgp updates
+        - debug bgp neighbor-events
+steps:
+  - name: apply_and_observe
+    parallel_connect:
+      - configurer
+      - observer
+    actions:
+      - device: configurer
+        configure: 172.20.0.3.yaml
+      - device: observer
+        send: observer_debug.yaml
+      - sleep: 2
+      - wait_until:
+          device: observer
+          pattern: bgp
+          timeout: 30
