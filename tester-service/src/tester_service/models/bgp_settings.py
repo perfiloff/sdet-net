@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from tester_service.core.settings import bgp_settings
 from tester_service.models.bgp_capabilities import BGPCapabilityModel
-from tester_service.models.bgp_msgs import BGPStats
 
 
 class BGPFSMState(str, Enum):
@@ -61,4 +60,15 @@ class BGPConnectionStatus(BaseModel):
     messages_sent: int = 0
     messages_received: int = 0
     connection_start_time: Optional[datetime] = None
-    stats: BGPStats = Field(default_factory=BGPStats)
+
+
+class BGPStats(BaseModel):
+    """BGP statistics"""
+
+    total_messages_sent: int
+    total_messages_received: int
+    open_messages: int
+    keepalive_messages: int
+    update_messages: int
+    notification_messages: int
+    connection_uptime: Optional[str] = None
