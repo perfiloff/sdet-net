@@ -38,15 +38,51 @@ from scapy.contrib.bgp import (
 )
 
 
+class _StatsStreamReader:
+    """StreamReader wrapper that records receive-side I/O statistics."""
+
+    def __init__(self, reader: asyncio.StreamReader, stats: BGPStats) -> None:
+        self._reader = reader
+        self._stats = stats
+
+    def __getattr__(self, name: str):
+        return getattr(self._reader, name)
+
+    async def read(self, n: int = -1) -> bytes:
+        data = await self._reader.read(n)
+        if data:
+            self._stats.bytes_received += len(data)
+        return data
+
+    async def readexactly(self, n: int) -> bytes:
+        data = await self._reader.readexactly(n)
+        self._stats.bytes_received += len(data)
+        return data
+
+
+class _StatsStreamWriter:
+    """StreamWriter wrapper that records send-side I/O statistics."""
+
+    def __init__(self, writer: asyncio.StreamWriter, stats: BGPStats) -> None:
+        self._writer = writer
+        self._stats = stats
+
+    def __getattr__(self, name: str):
+        return getattr(self._writer, name)
+
+    def write(self, data: bytes) -> None:
+        if data:
+            self._stats.bytes_sent += len(data)
+            self._stats.total_messages_sent += 1
+        self._writer.write(data)
+
+    def writelines(self, data) -> None:
+        for chunk in data:
+            self.write(chunk)
+
+
 class BGPManager:
     def __init__(self):
-        self.connection_status = BGPConnectionStatus(config=BGPConfig())
-        self._sync_as_path_asn_width()
-        self.reader: Optional[asyncio.StreamReader] = None
-        self.writer: Optional[asyncio.StreamWriter] = None
-        self.connection_task: Optional[asyncio.Task] = None
-        self.keepalive_task: Optional[asyncio.Task] = None
-        self.message_log: List[BGPMessage] = []
         self.stats = BGPStats(
             total_messages_sent=0,
             total_messages_received=0,
@@ -54,7 +90,16 @@ class BGPManager:
             keepalive_messages=0,
             update_messages=0,
             notification_messages=0,
+            bytes_sent=0,
+            bytes_received=0,
         )
+        self.connection_status = BGPConnectionStatus(config=BGPConfig(), stats=self.stats)
+        self._sync_as_path_asn_width()
+        self.reader: Optional[asyncio.StreamReader] = None
+        self.writer: Optional[asyncio.StreamWriter] = None
+        self.connection_task: Optional[asyncio.Task] = None
+        self.keepalive_task: Optional[asyncio.Task] = None
+        self.message_log: List[BGPMessage] = []
         # Routing table state
         self.routing_table: List[BGPRoute] = []
         print(f"BGPManager initialized with config: {self.connection_status.config}")
@@ -511,10 +556,7 @@ class BGPManager:
         if len(self.message_log) > 1000:
             self.message_log = self.message_log[-1000:]
 
-        # Update stats
-        if msg.direction == "sent":
-            self.stats.total_messages_sent += 1
-        else:
+        if msg.direction == "received":
             self.stats.total_messages_received += 1
 
         if msg.bgp_type == 1:
@@ -564,10 +606,12 @@ class BGPManager:
 
     async def _connect_once(self):
         self._set_state(BGPFSMState.CONNECT)
-        self.reader, self.writer = await asyncio.open_connection(
+        raw_reader, raw_writer = await asyncio.open_connection(
             self.connection_status.config.remote_host,
-            self.connection_status.config.remote_port
+            self.connection_status.config.remote_port,
         )
+        self.reader = _StatsStreamReader(raw_reader, self.stats)
+        self.writer = _StatsStreamWriter(raw_writer, self.stats)
 
         self._set_state(BGPFSMState.OPENSENT)
 
@@ -605,7 +649,6 @@ class BGPManager:
                     return
 
                 self.connection_status.last_activity = datetime.now()
-                self.connection_status.messages_received += 1
 
                 received = self.parse_bgp_message(data, direction="received")
 
